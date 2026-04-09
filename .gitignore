@@ -1,0 +1,4 @@
+vm/images
+vm/cluster-keys
+vm/kubeconfig
+vm/node*-keys
