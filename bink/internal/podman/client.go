@@ -85,6 +85,10 @@ func (c *Client) ContainerCreate(ctx context.Context, opts *ContainerCreateOptio
 		args = append(args, "-v", volume)
 	}
 
+	for _, mount := range opts.Mounts {
+		args = append(args, "--mount", mount)
+	}
+
 	for _, port := range opts.Ports {
 		args = append(args, "-p", port)
 	}
@@ -168,4 +172,9 @@ func (c *Client) ContainerInspect(ctx context.Context, name, format string) (str
 func (c *Client) ContainerCopy(ctx context.Context, srcPath, containerName, destPath string) error {
 	dest := fmt.Sprintf("%s:%s", containerName, destPath)
 	return util.RunCommandQuiet(ctx, "podman", "cp", srcPath, dest)
+}
+
+func (c *Client) VolumeRemove(ctx context.Context, name string) error {
+	logrus.Debugf("Removing volume %s", name)
+	return util.RunCommandQuiet(ctx, "podman", "volume", "rm", name)
 }

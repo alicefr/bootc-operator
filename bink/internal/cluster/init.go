@@ -11,6 +11,9 @@ import (
 
 const kubeadmConfigTemplate = `apiVersion: kubeadm.k8s.io/v1beta3
 kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: "%s"
+  bindPort: 6443
 nodeRegistration:
   criSocket: "unix:///var/run/crio/crio.sock"
 ---
@@ -71,7 +74,7 @@ func (c *Cluster) Init(ctx context.Context, opts InitOptions) error {
 	// Create kubeadm config in container
 	c.logger.Info("Creating kubeadm config file...")
 	containerName := fmt.Sprintf("k8s-%s", nodeName)
-	if err := c.createKubeadmConfig(ctx, containerName); err != nil {
+	if err := c.createKubeadmConfig(ctx, containerName, clusterIP); err != nil {
 		return fmt.Errorf("failed to create kubeadm config: %w", err)
 	}
 
@@ -114,6 +117,8 @@ func (c *Cluster) Init(ctx context.Context, opts InitOptions) error {
 		return fmt.Errorf("failed to install Calico: %w", err)
 	}
 
+	c.logger.Info("CNI plugins will be installed to /opt/cni/bin (tmpfs overlay for bootc)")
+
 	c.logger.Info("")
 	c.logger.Infof("✅ Cluster initialized on %s with Calico CNI", nodeName)
 	c.logger.Info("")
@@ -124,8 +129,9 @@ func (c *Cluster) Init(ctx context.Context, opts InitOptions) error {
 }
 
 // createKubeadmConfig creates the kubeadm config file in the container
-func (c *Cluster) createKubeadmConfig(ctx context.Context, containerName string) error {
-	cmd := fmt.Sprintf("podman exec %s bash -c 'cat > /tmp/kubeadm-config.yaml << \"KUBEADM\"\n%sKUBEADM\n'", containerName, kubeadmConfigTemplate)
+func (c *Cluster) createKubeadmConfig(ctx context.Context, containerName string, advertiseAddress string) error {
+	config := fmt.Sprintf(kubeadmConfigTemplate, advertiseAddress)
+	cmd := fmt.Sprintf("podman exec %s bash -c 'cat > /tmp/kubeadm-config.yaml << \"KUBEADM\"\n%sKUBEADM\n'", containerName, config)
 
 	execCmd := exec.CommandContext(ctx, "bash", "-c", cmd)
 	output, err := execCmd.CombinedOutput()

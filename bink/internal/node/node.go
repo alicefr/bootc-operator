@@ -9,6 +9,11 @@ import (
 	"github.com/bootc-dev/bink/internal/virsh"
 )
 
+// Config holds node configuration options
+type Config struct {
+	ImagesImage string
+}
+
 type Node struct {
 	Name           string
 	ContainerName  string
@@ -18,14 +23,22 @@ type Node struct {
 	Memory         int
 	VCPUs          int
 	BaseDisk       string
-	KeysDir        string
+	ImagesImage    string
 
 	podman *podman.Client
 	virsh  *virsh.Client
 }
 
 func New(name string, isControlPlane bool) *Node {
+	return NewWithConfig(name, isControlPlane, Config{})
+}
+
+func NewWithConfig(name string, isControlPlane bool, cfg Config) *Node {
 	containerName := config.ContainerNamePrefix + name
+
+	if cfg.ImagesImage == "" {
+		cfg.ImagesImage = config.DefaultBootcImagesImage
+	}
 
 	return &Node{
 		Name:           name,
@@ -36,7 +49,7 @@ func New(name string, isControlPlane bool) *Node {
 		Memory:         config.DefaultMemory,
 		VCPUs:          config.DefaultVCPUs,
 		BaseDisk:       config.DefaultBaseDisk,
-		KeysDir:        fmt.Sprintf("%s/%s-keys", config.ClusterKeysHostPath, name),
+		ImagesImage:    cfg.ImagesImage,
 		podman:         podman.NewClient(),
 		virsh:          virsh.NewClient(containerName),
 	}

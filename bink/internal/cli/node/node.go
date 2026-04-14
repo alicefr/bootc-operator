@@ -14,6 +14,7 @@ func NewNodeCmd() *cobra.Command {
 	cmd.AddCommand(newAddCmd())
 	cmd.AddCommand(newJoinCmd())
 	cmd.AddCommand(newSSHCmd())
+	cmd.AddCommand(newListCmd())
 
 	return cmd
 }

@@ -19,8 +19,8 @@ func (n *Node) generateCloudInit(ctx context.Context) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	pubKeyPath := filepath.Join(n.KeysDir, "cluster.key.pub")
-	pubKey, err := os.ReadFile(pubKeyPath)
+	// Read public key from container volume
+	pubKey, err := n.podman.ContainerExec(ctx, n.ContainerName, []string{"cat", config.ClusterKeyPubPath})
 	if err != nil {
 		return fmt.Errorf("reading public key: %w", err)
 	}
@@ -37,7 +37,7 @@ func (n *Node) generateCloudInit(ctx context.Context) error {
 		return err
 	}
 
-	isoPath := fmt.Sprintf("/src/%s-cloud-init.iso", n.Name)
+	isoPath := fmt.Sprintf("/workspace/%s-cloud-init.iso", n.Name)
 	files := []string{
 		"/tmp/meta-data",
 		"/tmp/user-data",
@@ -149,6 +149,7 @@ runcmd:
   - sysctl -w net.ipv4.ip_forward=1
   - echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-kubernetes.conf
   - mkdir -p /var/lib/kubelet/volumeplugins
+  - systemctl enable --now ostree-state-overlay@opt.service
   - systemctl enable --now qemu-guest-agent
   - nmcli connection modify "cloud-init enp2s0" ipv4.dns-search "~%s %s"
   - nmcli connection up "cloud-init enp2s0"

@@ -14,6 +14,7 @@ import (
 
 func newAddCmd() *cobra.Command {
 	var controlPlane string
+	var imagesImage string
 
 	cmd := &cobra.Command{
 		Use:   "add <node-name>",
@@ -22,22 +23,27 @@ func newAddCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			logger := logrus.New()
-			return runAdd(cmd.Context(), args[0], controlPlane, logger)
+			return runAdd(cmd.Context(), args[0], controlPlane, imagesImage, logger)
 		},
 	}
 
 	cmd.Flags().StringVarP(&controlPlane, "control-plane", "c", "node1", "Control plane node name")
+	cmd.Flags().StringVar(&imagesImage, "images-image", "localhost/fedora-bootc-k8s-image:latest", "Container image containing base VM images")
 
 	return cmd
 }
 
-func runAdd(ctx context.Context, nodeName, controlPlane string, logger *logrus.Logger) error {
+func runAdd(ctx context.Context, nodeName, controlPlane, imagesImage string, logger *logrus.Logger) error {
 	logger.Infof("=== Creating worker node %s ===", nodeName)
 	logger.Info("")
 
 	// Step 1: Create the new node
 	logger.Info("Step 1: Creating worker node...")
-	workerNode := node.New(nodeName, false)
+	logger.Infof("VM images container: %s", imagesImage)
+
+	workerNode := node.NewWithConfig(nodeName, false, node.Config{
+		ImagesImage: imagesImage,
+	})
 
 	exists, err := workerNode.Exists(ctx)
 	if err != nil {

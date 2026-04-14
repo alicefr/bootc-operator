@@ -3,6 +3,7 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -65,8 +66,8 @@ func (c *Client) ExecWithOutput(ctx context.Context, command string) error {
 	sshArgs := c.buildSSHArgs(command)
 
 	cmd := exec.CommandContext(ctx, "podman", append([]string{"exec", c.containerName, "ssh"}, sshArgs...)...)
-	cmd.Stdout = nil // Let it inherit
-	cmd.Stderr = nil
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	c.logger.Debugf("Running: podman exec %s ssh %s", c.containerName, strings.Join(sshArgs, " "))
 
@@ -82,9 +83,9 @@ func (c *Client) Interactive(ctx context.Context) error {
 	sshArgs := c.buildSSHArgs("")
 
 	cmd := exec.CommandContext(ctx, "podman", append([]string{"exec", "-ti", c.containerName, "ssh"}, sshArgs...)...)
-	cmd.Stdin = nil  // Inherit stdin
-	cmd.Stdout = nil // Inherit stdout
-	cmd.Stderr = nil // Inherit stderr
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	c.logger.Infof("Connecting to %s (SSH: %s:%s, cluster IP) as user %s",
 		c.containerName, c.host, c.port, c.user)
@@ -153,6 +154,7 @@ func (c *Client) buildSSHArgs(command string) []string {
 	args := []string{
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
 		"-i", c.keyPath,
 		"-p", c.port,
 		fmt.Sprintf("%s@%s", c.user, c.host),

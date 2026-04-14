@@ -3,12 +3,9 @@ package node
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/bootc-dev/bink/internal/config"
 	"github.com/bootc-dev/bink/internal/podman"
-	"github.com/bootc-dev/bink/internal/util"
 	"github.com/bootc-dev/bink/internal/virsh"
 	"github.com/sirupsen/logrus"
 )
@@ -24,34 +21,18 @@ func (n *Node) createContainer(ctx context.Context) error {
 	}
 
 	logrus.Infof("Creating container %s", n.ContainerName)
-
-	keysDir, err := filepath.Abs(n.KeysDir)
-	if err != nil {
-		return fmt.Errorf("getting absolute path for keys dir: %w", err)
-	}
-
-	if err := os.MkdirAll(keysDir, 0755); err != nil {
-		return fmt.Errorf("creating keys directory: %w", err)
-	}
-
-	imagesDir := filepath.Join(config.ClusterKeysHostPath, "images")
-	imagesDirAbs, err := filepath.Abs(imagesDir)
-	if err != nil {
-		return fmt.Errorf("getting absolute path for images dir: %w", err)
-	}
-
-	if err := os.MkdirAll(imagesDirAbs, 0755); err != nil {
-		return fmt.Errorf("creating images directory: %w", err)
-	}
+	logrus.Infof("Using images container: %s", n.ImagesImage)
 
 	opts := &podman.ContainerCreateOptions{
 		Name:    n.ContainerName,
 		Image:   config.DefaultClusterImage,
 		Network: config.DefaultNetworkName,
 		Devices: []string{"/dev/kvm", "/dev/fuse"},
+		Mounts: []string{
+			fmt.Sprintf("type=image,source=%s,destination=/images", n.ImagesImage),
+		},
 		Volumes: []string{
-			fmt.Sprintf("%s:/src:z", imagesDirAbs),
-			fmt.Sprintf("%s:/var/run/cluster:Z", keysDir),
+			"cluster-keys:/var/run/cluster:z",
 		},
 	}
 
@@ -72,30 +53,47 @@ func (n *Node) createContainer(ctx context.Context) error {
 	}
 
 	logrus.Infof("Container IP: %s (VM will inherit this via passt)", containerIP)
+
+	// Create workspace directory for overlay disks and cloud-init ISOs
+	if err := n.podman.ContainerExecQuiet(ctx, n.ContainerName, []string{"mkdir", "-p", "/workspace"}); err != nil {
+		return fmt.Errorf("creating workspace directory: %w", err)
+	}
+
 	return nil
 }
 
 func (n *Node) setupSSHKeys(ctx context.Context) error {
-	keyPath := filepath.Join(n.KeysDir, "cluster.key")
+	logrus.Info("Setting up cluster SSH key")
 
-	if _, err := os.Stat(keyPath); err == nil {
+	// Check if key already exists in the volume
+	checkCmd := []string{"test", "-f", config.ClusterKeyPath}
+	err := n.podman.ContainerExecQuiet(ctx, n.ContainerName, checkCmd)
+	if err == nil {
 		logrus.Info("Using existing cluster SSH key")
 		return nil
 	}
 
-	logrus.Info("Generating cluster SSH key")
+	logrus.Info("Generating cluster SSH key in cluster-keys volume")
 
-	if err := util.RunCommandQuiet(ctx, "ssh-keygen", "-t", "rsa", "-b", "4096",
-		"-f", keyPath, "-N", "", "-C", "cluster-key"); err != nil {
+	// Generate SSH key inside the container
+	genCmd := []string{"ssh-keygen", "-t", "rsa", "-b", "4096",
+		"-f", config.ClusterKeyPath, "-N", "", "-C", "cluster-key"}
+	if err := n.podman.ContainerExecQuiet(ctx, n.ContainerName, genCmd); err != nil {
 		return fmt.Errorf("generating SSH key: %w", err)
 	}
 
-	logrus.Infof("Cluster SSH key created at %s", keyPath)
+	// Set correct permissions on private key (SSH requires 600)
+	chmodCmd := []string{"chmod", "600", config.ClusterKeyPath}
+	if err := n.podman.ContainerExecQuiet(ctx, n.ContainerName, chmodCmd); err != nil {
+		return fmt.Errorf("setting key permissions: %w", err)
+	}
+
+	logrus.Infof("Cluster SSH key created at %s", config.ClusterKeyPath)
 	return nil
 }
 
 func (n *Node) createOverlayDisk(ctx context.Context) error {
-	overlayPath := fmt.Sprintf("/src/%s.qcow2", n.Name)
+	overlayPath := fmt.Sprintf("/workspace/%s.qcow2", n.Name)
 
 	logrus.Infof("Creating overlay disk for %s", n.Name)
 
@@ -117,8 +115,8 @@ func (n *Node) createOverlayDisk(ctx context.Context) error {
 func (n *Node) createVM(ctx context.Context) error {
 	logrus.Infof("Creating VM %s", n.Name)
 
-	overlayDisk := fmt.Sprintf("path=/src/%s.qcow2,format=qcow2,bus=virtio", n.Name)
-	isoPath := fmt.Sprintf("path=/src/%s-cloud-init.iso,device=cdrom", n.Name)
+	overlayDisk := fmt.Sprintf("path=/workspace/%s.qcow2,format=qcow2,bus=virtio", n.Name)
+	isoPath := fmt.Sprintf("path=/workspace/%s-cloud-init.iso,device=cdrom", n.Name)
 
 	opts := &virsh.VirtInstallOptions{
 		Name:   n.Name,

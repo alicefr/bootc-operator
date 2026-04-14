@@ -6,6 +6,7 @@ type ContainerCreateOptions struct {
 	Network     string
 	Devices     []string
 	Volumes     []string
+	Mounts      []string
 	Ports       []string
 	Environment map[string]string
 }

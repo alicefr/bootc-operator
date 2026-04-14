@@ -1,16 +1,17 @@
 package config
 
 const (
-	DefaultNetworkName = "k8s-cluster"
-	DefaultSubnet      = "10.89.0.0/24"
+	DefaultNetworkName = "podman"
+	DefaultSubnet      = "10.88.0.0/16"
 
-	DefaultClusterImage = "localhost/cluster:latest"
-	DefaultBootcImage   = "localhost/fedora-bootc-k8s:latest"
+	DefaultClusterImage     = "localhost/cluster:latest"
+	DefaultBootcImage       = "localhost/fedora-bootc-k8s:latest"
+	DefaultBootcImagesImage = "localhost/fedora-bootc-k8s-image:latest"
 
-	DefaultBaseDisk = "/src/fedora-bootc-k8s.qcow2"
+	DefaultBaseDisk = "/images/fedora-bootc-k8s.qcow2"
 	DefaultMemory   = 8192
-	DefaultVCPUs    = 4
-	DefaultDiskSize = "10G"
+	DefaultVCPUs       = 4
+	DefaultDiskSize    = "10G"
 
 	DefaultSSHPort      = 2222
 	DefaultSSHUser      = "core"
@@ -30,7 +31,7 @@ const (
 
 	DefaultAPIServerPort = 6443
 	DefaultCNIManifest   = "https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml"
-	DefaultKubeconfigDir = "./vm"
+	DefaultKubeconfigDir = "../vm"
 
 	ContainerNamePrefix = "k8s-"
 

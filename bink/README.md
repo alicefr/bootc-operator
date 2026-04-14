@@ -10,7 +10,7 @@
 
 ## Status
 
-🚧 **Under Development** - Phase 1 (Foundation) Complete
+✅ **Feature Complete** - All phases completed!
 
 ### Phase 1: Foundation ✅
 - [x] Go module initialized
@@ -36,18 +36,43 @@
 
 **Deliverable:** Can create network and control plane node ✅
 
-### Next Phases
+### Phase 3: Cluster Operations ✅
+- [x] SSH client implementation
+- [x] SSH key management
+- [x] Cluster initialization (kubeadm init)
+- [x] Calico CNI installation
+- [x] Worker node join functionality
+- [x] DNS management (dnsmasq)
+- [x] Cloud-init wait logic
+- [x] Interactive SSH command
 
-- **Phase 3**: Cluster Operations (SSH, kubeadm init, node join, DNS)
-- **Phase 4**: API and Cleanup (API exposure, cluster stop)
+**Deliverable:** Can create full cluster and add worker nodes ✅
 
-## Current Command Structure
+### Phase 4: API and Cleanup ✅
+- [x] SSH tunnel for API server
+- [x] API expose command
+- [x] Node list command
+- [x] Cluster stop command
+- [x] Makefile integration
+- [x] Documentation updates
+
+**Deliverable:** Feature-complete bink binary ✅
+
+## Command Structure
 
 ```
 bink
-├── cluster start               # Start cluster (network + node + init) (TODO)
-├── cluster stop                # Stop cluster (TODO)
-└── node join <name>            # Join worker node (TODO)
+├── cluster
+│   ├── start                   # Start cluster (network + node + init) ✅
+│   └── stop                    # Stop and remove all nodes ✅
+│       --remove-data           # Also remove overlay disks, ISOs, keys, kubeconfig
+├── node
+│   ├── add <name>              # Create and join worker node ✅
+│   ├── join <name>             # Alias for add ✅
+│   ├── ssh <name>              # SSH into node's VM ✅
+│   └── list                    # List all cluster nodes ✅
+└── api
+    └── expose                  # Expose API server to localhost:6443 ✅
 ```
 
 Clean, simple interface matching the Makefile targets.
@@ -59,18 +84,30 @@ cd /workspace/bink
 go build -o bink ./cmd/bink
 ```
 
-## Usage (when complete)
+## Usage
 
 ```bash
 # Start cluster (creates network, control plane node, initializes k8s)
 ./bink cluster start
 
-# Join worker nodes
-./bink node join node2
-./bink node join node3
+# List nodes
+./bink node list
 
-# Stop cluster
+# Join worker nodes
+./bink node add node2
+./bink node add node3
+
+# SSH into a node
+./bink node ssh node1
+
+# Expose API server to localhost:6443 (generates kubeconfig)
+./bink api expose
+
+# Stop cluster (keeps data)
 ./bink cluster stop
+
+# Stop cluster and remove all data
+./bink cluster stop --remove-data
 ```
 
 ## Testing
@@ -88,17 +125,47 @@ bink/
 ├── cmd/bink/main.go                    # CLI entry point ✅
 ├── internal/
 │   ├── cli/                            # Cobra commands ✅
-│   │   ├── cluster/start.go            # cluster start ✅
-│   │   ├── cluster/stop.go             # cluster stop ✅
-│   │   └── node/join.go                # node join ✅
-│   ├── cluster/                        # Cluster orchestration (TODO)
-│   ├── node/                           # Node operations (TODO)
-│   ├── network/                        # Network management (TODO)
-│   ├── ssh/                            # SSH operations (TODO)
+│   │   ├── api/                        # API commands ✅
+│   │   │   ├── api.go                  # API root command ✅
+│   │   │   └── expose.go               # API expose ✅
+│   │   ├── cluster/                    # Cluster commands ✅
+│   │   │   ├── cluster.go              # Cluster root command ✅
+│   │   │   ├── create.go               # cluster create ✅
+│   │   │   ├── start.go                # cluster start ✅
+│   │   │   ├── stop.go                 # cluster stop ✅
+│   │   │   └── destroy.go              # cluster destroy ✅
+│   │   └── node/                       # Node commands ✅
+│   │       ├── node.go                 # Node root command ✅
+│   │       ├── add.go                  # node add ✅
+│   │       ├── join.go                 # node join ✅
+│   │       ├── ssh.go                  # node ssh ✅
+│   │       └── list.go                 # node list ✅
+│   ├── cluster/                        # Cluster orchestration ✅
+│   │   ├── cluster.go                  # Core orchestration ✅
+│   │   ├── init.go                     # kubeadm init ✅
+│   │   └── join.go                     # kubeadm join ✅
+│   ├── node/                           # Node operations ✅
+│   │   ├── node.go                     # Core node type ✅
+│   │   ├── create.go                   # Container + VM creation ✅
+│   │   ├── ip.go                       # IP/MAC calculation ✅
+│   │   └── cloudinit.go                # Cloud-init ISO ✅
+│   ├── network/                        # Network management ✅
+│   │   └── network.go                  # Podman network ops ✅
+│   ├── dns/                            # DNS management ✅
+│   │   └── dns.go                      # dnsmasq entries ✅
+│   ├── ssh/                            # SSH operations ✅
+│   │   ├── ssh.go                      # SSH client ✅
+│   │   ├── keys.go                     # Key management ✅
+│   │   └── tunnel.go                   # Port forwarding ✅
 │   ├── podman/                         # Podman wrapper ✅
+│   │   └── client.go                   # Podman commands ✅
 │   ├── virsh/                          # Virsh wrapper ✅
+│   │   └── client.go                   # Virsh commands ✅
 │   ├── config/                         # Configuration ✅
+│   │   ├── config.go                   # Config types ✅
+│   │   └── defaults.go                 # Constants ✅
 │   └── util/                           # Utilities ✅
+│       └── exec.go                     # Command execution ✅
 ├── go.mod ✅
 ├── go.sum ✅
 ├── PLAN.md
