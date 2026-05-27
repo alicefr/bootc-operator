@@ -19,6 +19,10 @@ func (f *fakeExecutor) Status(_ context.Context) ([]byte, error) {
 	return f.data, f.err
 }
 
+func (f *fakeExecutor) Switch(_ context.Context, _ string, _ bool) error {
+	return nil
+}
+
 func (f *fakeExecutor) set(data []byte, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
