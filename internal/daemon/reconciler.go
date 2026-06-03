@@ -5,32 +5,55 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
+	"sync"
+	"time"
 
+	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	bootcv1alpha1 "github.com/jlebon/bootc-operator/api/v1alpha1"
 	"github.com/jlebon/bootc-operator/internal/bootc"
 )
 
+// switchOp tracks the state of an in-flight bootc switch operation.
+type switchOp struct {
+	mu     sync.Mutex
+	image  string
+	apply  bool
+	cancel context.CancelFunc
+	err    error
+}
+
 // BootcNodeReconciler reconciles the BootcNode for the node this daemon
-// runs on. It reads bootc status from the host and writes it into the
-// BootcNode's status subresource.
+// runs on. It reads bootc status from the host, detects image mismatches,
+// and drives updates via bootc switch.
 type BootcNodeReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	NodeName string
 	Executor bootc.Executor
+
+	inflight   switchOp
+	switchDone chan event.GenericEvent
 }
 
 func (r *BootcNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.switchDone = make(chan event.GenericEvent, 1)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&bootcv1alpha1.BootcNode{}).
+		WatchesRawSource(source.Channel(r.switchDone, &handler.EnqueueRequestForObject{})).
 		Named("bootcnode").
 		Complete(r)
 }
@@ -51,23 +74,27 @@ func (r *BootcNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, fmt.Errorf("fetching BootcNode: %w", err)
 	}
 
-	patch := client.MergeFrom(bn.DeepCopy())
+	specChanged := bn.Generation > bn.Status.ObservedGeneration
+	orig := bn.DeepCopy()
+	patch := client.MergeFrom(orig)
+	bn.Status.ObservedGeneration = bn.Generation
 
-	if err := r.populateStatus(ctx, &bn); err != nil {
-		log.Error(err, "Failed to populate bootc status")
+	result, reconcileErr := r.reconcileBootcNode(ctx, &bn, specChanged)
+
+	if !reflect.DeepEqual(bn.Status, orig.Status) {
+		if patchErr := r.Status().Patch(ctx, &bn, patch); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patching BootcNode status: %w", patchErr)
+		}
 	}
 
-	if err := r.Status().Patch(ctx, &bn, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patching BootcNode status: %w", err)
-	}
-
-	log.Info("Patched BootcNode status from bootc")
-	return ctrl.Result{}, nil
+	return result, reconcileErr
 }
 
-func (r *BootcNodeReconciler) populateStatus(ctx context.Context, bn *bootcv1alpha1.BootcNode) error {
-	data, err := r.Executor.Status(ctx)
-	if err != nil {
+func (r *BootcNodeReconciler) reconcileBootcNode(ctx context.Context, bn *bootcv1alpha1.BootcNode, specChanged bool) (ctrl.Result, error) {
+	log := logf.FromContext(ctx).WithValues("node", r.NodeName)
+
+	if err := r.populateBootcFields(ctx, bn); err != nil {
+		log.Error(err, "Failed to populate bootc status")
 		apimeta.SetStatusCondition(&bn.Status.Conditions, metav1.Condition{
 			Type:               bootcv1alpha1.NodeDegraded,
 			Status:             metav1.ConditionTrue,
@@ -75,30 +102,98 @@ func (r *BootcNodeReconciler) populateStatus(ctx context.Context, bn *bootcv1alp
 			Message:            fmt.Sprintf("failed to get bootc status: %v", err),
 			ObservedGeneration: bn.Generation,
 		})
-		return fmt.Errorf("getting bootc status: %w", err)
+		return ctrl.Result{}, fmt.Errorf("populating bootc fields: %w", err)
 	}
 
-	status, err := bootc.ParseStatus(data)
-	if err != nil {
+	if bn.Status.Booted == nil {
 		apimeta.SetStatusCondition(&bn.Status.Conditions, metav1.Condition{
 			Type:               bootcv1alpha1.NodeDegraded,
 			Status:             metav1.ConditionTrue,
 			Reason:             bootcv1alpha1.NodeReasonError,
-			Message:            fmt.Sprintf("failed to parse bootc status: %v", err),
+			Message:            "bootc status has no booted entry",
 			ObservedGeneration: bn.Generation,
 		})
-		return fmt.Errorf("parsing bootc status: %w", err)
+		return ctrl.Result{}, fmt.Errorf("bootc status has no booted entry")
 	}
 
-	bn.Status.ObservedGeneration = bn.Generation
-	bn.Status.Booted = convertBootEntry(status.Status.Booted)
-	bn.Status.Staged = convertBootEntry(status.Status.Staged)
-	bn.Status.Rollback = convertBootEntry(status.Status.Rollback)
+	// Node is idle
+	if !imageNeedsUpdate(bn.Spec.DesiredImage, bn.Status.Booted.ImageDigest) {
+		apimeta.SetStatusCondition(&bn.Status.Conditions, metav1.Condition{
+			Type:               bootcv1alpha1.NodeIdle,
+			Status:             metav1.ConditionTrue,
+			Reason:             bootcv1alpha1.NodeReasonIdle,
+			ObservedGeneration: bn.Generation,
+		})
+		apimeta.SetStatusCondition(&bn.Status.Conditions, metav1.Condition{
+			Type:               bootcv1alpha1.NodeDegraded,
+			Status:             metav1.ConditionFalse,
+			Reason:             bootcv1alpha1.NodeReasonHealthy,
+			ObservedGeneration: bn.Generation,
+		})
+		return ctrl.Result{}, nil
+	}
+
+	switchErr := r.inflight.takeErr()
+
+	if switchErr != nil {
+		apimeta.SetStatusCondition(&bn.Status.Conditions, metav1.Condition{
+			Type:               bootcv1alpha1.NodeIdle,
+			Status:             metav1.ConditionTrue,
+			Reason:             bootcv1alpha1.NodeReasonIdle,
+			ObservedGeneration: bn.Generation,
+		})
+		apimeta.SetStatusCondition(&bn.Status.Conditions, metav1.Condition{
+			Type:               bootcv1alpha1.NodeDegraded,
+			Status:             metav1.ConditionTrue,
+			Reason:             bootcv1alpha1.NodeReasonError,
+			Message:            fmt.Sprintf("bootc switch failed: %v", switchErr),
+			ObservedGeneration: bn.Generation,
+		})
+		// Requeue with a delay to retry transient failures (e.g. network
+		// blips, registry timeouts) without hammering the registry.
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// the staged image needs to be applied with bootc switch --apply
+	apply := bn.Spec.DesiredImageState == bootcv1alpha1.DesiredImageStateBooted
+	desiredImage := bn.Spec.DesiredImage
+
+	if skip := r.inflight.acquire(log, desiredImage, apply); skip {
+		return ctrl.Result{}, nil
+	}
+
+	_, desiredDigest, _ := strings.Cut(desiredImage, "@")
+	alreadyStaged := bn.Status.Staged != nil && bn.Status.Staged.ImageDigest == desiredDigest
+
+	var reason string
+	switch {
+	case alreadyStaged && !apply:
+		reason = bootcv1alpha1.NodeReasonStaged
+		log.Info("Image already staged", "image", desiredImage)
+
+	case alreadyStaged && apply:
+		reason = bootcv1alpha1.NodeReasonRebooting
+
+		switchCtx, cancel := context.WithCancel(context.Background())
+		r.inflight.start(desiredImage, true, cancel)
+
+		log.Info("Starting apply+reboot", "image", desiredImage)
+		go r.inflight.run(switchCtx, r.NodeName, desiredImage, true, r.Executor, r.switchDone)
+
+	default:
+		reason = bootcv1alpha1.NodeReasonStaging
+
+		switchCtx, cancel := context.WithCancel(context.Background())
+		r.inflight.start(desiredImage, false, cancel)
+
+		log.Info("Starting staging", "image", desiredImage)
+		go r.inflight.run(switchCtx, r.NodeName, desiredImage, false, r.Executor, r.switchDone)
+	}
 
 	apimeta.SetStatusCondition(&bn.Status.Conditions, metav1.Condition{
 		Type:               bootcv1alpha1.NodeIdle,
-		Status:             metav1.ConditionTrue,
-		Reason:             bootcv1alpha1.NodeReasonIdle,
+		Status:             metav1.ConditionFalse,
+		Reason:             reason,
 		ObservedGeneration: bn.Generation,
 	})
 	apimeta.SetStatusCondition(&bn.Status.Conditions, metav1.Condition{
@@ -108,7 +203,103 @@ func (r *BootcNodeReconciler) populateStatus(ctx context.Context, bn *bootcv1alp
 		ObservedGeneration: bn.Generation,
 	})
 
+	return ctrl.Result{}, nil
+}
+
+func (s *switchOp) takeErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := s.err
+	s.err = nil
+	return err
+}
+
+// acquire checks whether a switch operation is already in flight.
+// It returns true if the reconciler should skip (operation in progress),
+// or false after cancelling any stale in-flight switch.
+func (s *switchOp) acquire(log logr.Logger, image string, apply bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.image == image && s.apply == apply {
+		log.Info("Switch already in progress for this image", "image", image)
+		return true
+	}
+	if s.cancel != nil {
+		if s.apply {
+			log.Info("Apply in progress, waiting for reboot", "image", s.image)
+			return true
+		}
+		log.Info("Cancelling in-flight switch", "old", s.image, "new", image)
+		s.cancel()
+		s.image = ""
+		s.apply = false
+		s.cancel = nil
+	}
+	return false
+}
+
+func (s *switchOp) start(image string, apply bool, cancel context.CancelFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.image = image
+	s.apply = apply
+	s.cancel = cancel
+}
+
+func (s *switchOp) run(ctx context.Context, nodeName, image string, apply bool, executor bootc.Executor, done chan<- event.GenericEvent) {
+	log := logf.FromContext(context.Background()).WithValues("node", nodeName, "image", image, "apply", apply)
+
+	err := executor.Switch(ctx, image, apply)
+
+	s.mu.Lock()
+	if ctx.Err() != nil {
+		log.Info("Switch cancelled")
+	} else if err != nil {
+		log.Error(err, "Switch failed")
+		s.err = err
+	}
+	s.image = ""
+	s.apply = false
+	s.cancel = nil
+	s.mu.Unlock()
+
+	if ctx.Err() == nil {
+		done <- event.GenericEvent{
+			Object: &bootcv1alpha1.BootcNode{
+				ObjectMeta: metav1.ObjectMeta{Name: nodeName},
+			},
+		}
+	}
+}
+
+func (r *BootcNodeReconciler) populateBootcFields(ctx context.Context, bn *bootcv1alpha1.BootcNode) error {
+	data, err := r.Executor.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("getting bootc status: %w", err)
+	}
+
+	status, err := bootc.ParseStatus(data)
+	if err != nil {
+		return fmt.Errorf("failed to parse bootc status: %w", err)
+	}
+
+	bn.Status.Booted = convertBootEntry(status.Status.Booted)
+	bn.Status.Staged = convertBootEntry(status.Status.Staged)
+	bn.Status.Rollback = convertBootEntry(status.Status.Rollback)
+
 	return nil
+}
+
+// imageNeedsUpdate compares only the digest portion of desiredImage against
+// bootedDigest. It assumes upgrades always come from the same image repository.
+// TODO: also compare the image repository to detect cross-image switches.
+func imageNeedsUpdate(desiredImage, bootedDigest string) bool {
+	_, digest, ok := strings.Cut(desiredImage, "@")
+	if !ok {
+		return true
+	}
+	return digest != bootedDigest
 }
 
 func convertBootEntry(entry *bootc.BootEntry) *bootcv1alpha1.ImageInfo {
