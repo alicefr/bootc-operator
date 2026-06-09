@@ -6,6 +6,8 @@ CONTAINER_TOOL ?= podman
 BINK_CLUSTER_NAME ?= e2e
 KUBECONFIG_BINK ?= ./kubeconfig-$(BINK_CLUSTER_NAME)
 ARTIFACTS ?= $(abspath _output/logs)
+export BINK_NODE_DISK_IMAGE ?= ghcr.io/alicefr/bink/node:v1.35-fedora-44-disk
+export BINK_LOCAL_REGISTRY_NODE_IMAGE ?= registry.cluster.local:5000/node
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -63,6 +65,7 @@ e2e: ## Run e2e tests (requires: make deploy-bink). V=1 for verbose. RUN=<regex>
 	cd test/e2e && KUBECONFIG=$(abspath $(KUBECONFIG_BINK)) BINK_CLUSTER_NAME=$(BINK_CLUSTER_NAME) \
 		$(if $(BINK_NODE_IMAGE),BINK_NODE_IMAGE=$(BINK_NODE_IMAGE)) \
 		ARTIFACTS=$(ARTIFACTS) \
+		NODE_IMAGE_DIGEST=$$(podman inspect --format '{{index .Config.Labels "bink.bootc-image-digest"}}' $(BINK_NODE_DISK_IMAGE)) \
 		go test -timeout 10m -count=1 $(if $(V),-v) $(if $(RUN),-run $(RUN)) .
 
 ##@ Build
@@ -111,19 +114,26 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 # Note the :latest tag here: this makes the pull policy be Always.
 IMG_BINK ?= registry.cluster.local:5000/bootc-operator-e2e:latest
 
-.PHONY: start-bink
-start-bink: ## Start a bink cluster (idempotent).
+.PHONY: seed-node-image
+seed-node-image: ## Pull the bootc node image by digest and push to the bink registry.
 	bink registry start
-	bink cluster list 2>&1 | grep -qw $(BINK_CLUSTER_NAME) || \
-		bink cluster start --cluster-name $(BINK_CLUSTER_NAME) --node-name controller --api-port 0 --expose $(KUBECONFIG_BINK) \
-		$(if $(BINK_NODE_IMAGE),--node-image $(BINK_NODE_IMAGE))
-	kubectl --kubeconfig $(KUBECONFIG_BINK) wait --for=condition=Ready node/controller --timeout=5m
+	podman pull $(BINK_NODE_DISK_IMAGE)
+	bootc_img=$$(podman inspect --format '{{index .Config.Labels "bink.bootc-image"}}' $(BINK_NODE_DISK_IMAGE)) && \
+		bootc_digest=$$(podman inspect --format '{{index .Config.Labels "bink.bootc-image-digest"}}' $(BINK_NODE_DISK_IMAGE)) && \
+		podman pull "$$bootc_img@$$bootc_digest" && \
+		podman tag "$$bootc_img@$$bootc_digest" localhost:5000/node:latest
+	podman push --tls-verify=false localhost:5000/node:latest
 
 .PHONY: deploy-bink
-deploy-bink: start-bink kustomize ## Deploy to a bink cluster (requires: buildimg).
+deploy-bink: seed-node-image kustomize ## Deploy to a bink cluster (requires: buildimg).
+	$(MAKE) build-update-image
 	podman push --tls-verify=false $(IMG) localhost:5000/bootc-operator-e2e:latest
-	# On re-deploy, restart the rollout to force a re-pull of the :latest tag.
-	# On fresh deploy, skip the restart -- the pod is already pulling the correct image.
+	bink cluster list 2>&1 | grep -qw $(BINK_CLUSTER_NAME) || { \
+		bootc_digest=$$(podman inspect --format '{{index .Config.Labels "bink.bootc-image-digest"}}' $(BINK_NODE_DISK_IMAGE)) && \
+		bink cluster start --cluster-name $(BINK_CLUSTER_NAME) --node-name controller --api-port 0 --expose $(KUBECONFIG_BINK) \
+		--node-image $(BINK_NODE_DISK_IMAGE) \
+		--target-imgref $(BINK_LOCAL_REGISTRY_NODE_IMAGE)@$$bootc_digest; }
+	kubectl --kubeconfig $(KUBECONFIG_BINK) wait --for=condition=Ready node/controller --timeout=5m
 	@existed=$$(kubectl --kubeconfig $(KUBECONFIG_BINK) -n bootc-operator get deploy bootc-operator-controller-manager -o name 2>/dev/null || true) && \
 	$(MAKE) deploy KUBECONFIG=$(abspath $(KUBECONFIG_BINK)) IMG=$(IMG_BINK) && \
 	if [ -n "$$existed" ]; then \
