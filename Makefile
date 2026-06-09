@@ -85,6 +85,12 @@ build-daemon: ## Build daemon binary.
 buildimg: ## Build container image.
 	$(CONTAINER_TOOL) build -t $(IMG) .
 
+.PHONY: build-update-image
+build-update-image: ## Build a derived node image for update testing and push to bink registry.
+	@printf 'FROM localhost:5000/node:latest\nRUN touch /usr/share/update-marker\n' | \
+		podman build -t localhost:5000/node:update -f - .
+	podman push --tls-verify=false localhost:5000/node:update
+
 ##@ Deployment
 
 ifndef ignore-not-found
