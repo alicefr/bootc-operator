@@ -66,6 +66,7 @@ e2e: ## Run e2e tests (requires: make deploy-bink). V=1 for verbose. RUN=<regex>
 		$(if $(BINK_NODE_IMAGE),BINK_NODE_IMAGE=$(BINK_NODE_IMAGE)) \
 		ARTIFACTS=$(ARTIFACTS) \
 		NODE_IMAGE_DIGEST=$$(podman inspect --format '{{index .Config.Labels "bink.bootc-image-digest"}}' $(BINK_NODE_DISK_IMAGE)) \
+		UPDATE_IMAGE_DIGEST=$$(skopeo inspect --tls-verify=false docker://localhost:5000/node:update | jq -r '.Digest') \
 		go test -timeout 10m -count=1 $(if $(V),-v) $(if $(RUN),-run $(RUN)) .
 
 ##@ Build
