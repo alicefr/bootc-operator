@@ -45,6 +45,10 @@ const (
 	// digest ref, or a malformed nodeSelector).
 	PoolInvalidSpec string = "InvalidSpec"
 
+	// PoolTagResolutionError means the controller failed to resolve
+	// an image tag to a digest.
+	PoolTagResolutionError string = "TagResolutionError"
+
 	// PoolHealthy means no issues.
 	PoolHealthy string = "Healthy"
 )
