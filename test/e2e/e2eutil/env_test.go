@@ -55,6 +55,36 @@ func TestMergeArgs(t *testing.T) {
 			newArgs: []string{"--interval=10s"},
 			want:    []string{"--interval=10s"},
 		},
+		{
+			name:    "space-separated flag replaced",
+			oldArgs: []string{"--interval", "5m", "--foo=bar"},
+			newArgs: []string{"--interval", "10s"},
+			want:    []string{"--interval", "10s", "--foo=bar"},
+		},
+		{
+			name:    "equals form replaces space-separated",
+			oldArgs: []string{"--interval", "5m"},
+			newArgs: []string{"--interval=10s"},
+			want:    []string{"--interval=10s"},
+		},
+		{
+			name:    "space-separated replaces equals form",
+			oldArgs: []string{"--interval=5m"},
+			newArgs: []string{"--interval", "10s"},
+			want:    []string{"--interval", "10s"},
+		},
+		{
+			name:    "space-separated new arg appended",
+			oldArgs: []string{"--foo=bar"},
+			newArgs: []string{"--interval", "10s"},
+			want:    []string{"--foo=bar", "--interval", "10s"},
+		},
+		{
+			name:    "mixed forms multiple flags",
+			oldArgs: []string{"--foo", "bar", "--enable-feature", "--baz=qux"},
+			newArgs: []string{"--foo=newbar", "--baz", "newqux"},
+			want:    []string{"--foo=newbar", "--enable-feature", "--baz", "newqux"},
+		},
 	}
 
 	for _, tt := range tests {

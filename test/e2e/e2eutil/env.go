@@ -398,7 +398,11 @@ const (
 )
 
 // argName returns the flag name from a --key or --key=value argument.
+// Returns "" for bare values that don't start with --.
 func argName(arg string) string {
+	if !strings.HasPrefix(arg, "--") {
+		return ""
+	}
 	arg = strings.TrimPrefix(arg, "--")
 	if i := strings.Index(arg, "="); i >= 0 {
 		return arg[:i]
@@ -406,26 +410,62 @@ func argName(arg string) string {
 	return arg
 }
 
+type flagGroup struct {
+	name  string
+	elems []string
+}
+
+// parseArgs groups a flat argument list into logical flags.
+// "--key=val" is one group; "--key val" (space-separated) is one group;
+// "--bool-flag" is one group.
+func parseArgs(args []string) []flagGroup {
+	var groups []flagGroup
+	for i := 0; i < len(args); i++ {
+		n := argName(args[i])
+		if n == "" {
+			continue
+		}
+		g := flagGroup{name: n, elems: []string{args[i]}}
+		// --key value: flag without "=" whose next element is a value, not another flag
+		if !strings.Contains(args[i], "=") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+			g.elems = append(g.elems, args[i+1])
+			i++
+		}
+		// --key=value or --bool-flag: single-element group (no special handling needed)
+		groups = append(groups, g)
+	}
+	return groups
+}
+
 // mergeArgs merges newArgs into oldArgs. Existing flags whose name
 // matches a new flag are replaced; unmatched new flags are appended.
+// Handles both --key=value and --key value forms.
 func mergeArgs(oldArgs, newArgs []string) []string {
-	newByName := make(map[string]string, len(newArgs))
-	for _, a := range newArgs {
-		newByName[argName(a)] = a
-	}
-
-	var result []string
-	for _, a := range oldArgs {
-		if replacement, ok := newByName[argName(a)]; ok {
-			result = append(result, replacement)
-			delete(newByName, argName(a))
-		} else {
-			result = append(result, a)
+	newGroups := parseArgs(newArgs)
+	newByName := make(map[string]flagGroup, len(newGroups))
+	for _, g := range newGroups {
+		if g.name != "" {
+			newByName[g.name] = g
 		}
 	}
-	for _, a := range newArgs {
-		if _, ok := newByName[argName(a)]; ok {
-			result = append(result, a)
+
+	oldGroups := parseArgs(oldArgs)
+	var result []string
+	for _, g := range oldGroups {
+		if g.name != "" {
+			if replacement, ok := newByName[g.name]; ok {
+				result = append(result, replacement.elems...)
+				delete(newByName, g.name)
+				continue
+			}
+		}
+		result = append(result, g.elems...)
+	}
+	for _, g := range newGroups {
+		if g.name != "" {
+			if _, ok := newByName[g.name]; ok {
+				result = append(result, g.elems...)
+			}
 		}
 	}
 	return result
