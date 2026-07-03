@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 	. "github.com/onsi/gomega" //nolint:staticcheck
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -360,4 +363,129 @@ func runBink(t *testing.T, args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// RetagImage reads the image at srcRef from the localhost registry and
+// tags it as dstTag. Both refs use localhost:5000 (host-side registry).
+func RetagImage(t *testing.T, srcRef, dstTag string) {
+	t.Helper()
+
+	src, err := name.ParseReference(srcRef, name.Insecure)
+	if err != nil {
+		t.Fatalf("parsing src ref %q: %v", srcRef, err)
+	}
+	desc, err := remote.Get(src)
+	if err != nil {
+		t.Fatalf("fetching %q: %v", srcRef, err)
+	}
+	img, err := desc.Image()
+	if err != nil {
+		t.Fatalf("getting image from descriptor: %v", err)
+	}
+
+	dst, err := name.ParseReference(dstTag, name.Insecure)
+	if err != nil {
+		t.Fatalf("parsing dst ref %q: %v", dstTag, err)
+	}
+	if err := remote.Write(dst, img); err != nil {
+		t.Fatalf("writing %q: %v", dstTag, err)
+	}
+}
+
+const (
+	controllerNamespace  = "bootc-operator"
+	controllerDeployment = "bootc-operator-controller-manager"
+)
+
+// argName returns the flag name from a --key or --key=value argument.
+func argName(arg string) string {
+	arg = strings.TrimPrefix(arg, "--")
+	if i := strings.Index(arg, "="); i >= 0 {
+		return arg[:i]
+	}
+	return arg
+}
+
+// mergeArgs merges newArgs into oldArgs. Existing flags whose name
+// matches a new flag are replaced; unmatched new flags are appended.
+func mergeArgs(oldArgs, newArgs []string) []string {
+	newByName := make(map[string]string, len(newArgs))
+	for _, a := range newArgs {
+		newByName[argName(a)] = a
+	}
+
+	var result []string
+	for _, a := range oldArgs {
+		if replacement, ok := newByName[argName(a)]; ok {
+			result = append(result, replacement)
+			delete(newByName, argName(a))
+		} else {
+			result = append(result, a)
+		}
+	}
+	for _, a := range newArgs {
+		if _, ok := newByName[argName(a)]; ok {
+			result = append(result, a)
+		}
+	}
+	return result
+}
+
+// PatchControllerTestFlags patches the controller deployment args for
+// testing and waits for the rollout to complete. The original args
+// are restored in t.Cleanup.
+func PatchControllerTestFlags(t *testing.T, extraFlags ...string) {
+	t.Helper()
+
+	kubeconfigPath := os.Getenv("KUBECONFIG")
+
+	out, err := exec.Command("kubectl", "--kubeconfig", kubeconfigPath,
+		"-n", controllerNamespace, "get", "deploy", controllerDeployment,
+		"-o", "jsonpath={.spec.template.spec.containers[0].args}").CombinedOutput()
+	if err != nil {
+		t.Fatalf("reading deployment args: %s: %v", string(out), err)
+	}
+	originalArgsJSON := string(out)
+
+	var oldArgs []string
+	if err := json.Unmarshal(out, &oldArgs); err != nil {
+		t.Fatalf("parsing deployment args %q: %v", string(out), err)
+	}
+
+	merged := mergeArgs(oldArgs, extraFlags)
+
+	mergedJSON, err := json.Marshal(merged)
+	if err != nil {
+		t.Fatalf("marshalling args: %v", err)
+	}
+
+	patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":"manager","args":%s}]}}}}`, mergedJSON)
+	if out, err := exec.Command("kubectl", "--kubeconfig", kubeconfigPath,
+		"-n", controllerNamespace, "patch", "deploy", controllerDeployment,
+		"--type=strategic", "-p", patch).CombinedOutput(); err != nil {
+		t.Fatalf("patching deployment: %s: %v", string(out), err)
+	}
+
+	if out, err := exec.Command("kubectl", "--kubeconfig", kubeconfigPath,
+		"-n", controllerNamespace, "rollout", "status", "deploy/"+controllerDeployment,
+		"--timeout=2m").CombinedOutput(); err != nil {
+		t.Fatalf("waiting for rollout: %s: %v", string(out), err)
+	}
+
+	t.Logf("Patched controller args to %s (was %s)", mergedJSON, originalArgsJSON)
+
+	t.Cleanup(func() {
+		patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"containers":[{"name":"manager","args":%s}]}}}}`, originalArgsJSON)
+		if out, err := exec.Command("kubectl", "--kubeconfig", kubeconfigPath,
+			"-n", controllerNamespace, "patch", "deploy", controllerDeployment,
+			"--type=strategic", "-p", patch).CombinedOutput(); err != nil {
+			t.Logf("WARNING: restoring deployment args: %s: %v", string(out), err)
+			return
+		}
+		if out, err := exec.Command("kubectl", "--kubeconfig", kubeconfigPath,
+			"-n", controllerNamespace, "rollout", "status", "deploy/"+controllerDeployment,
+			"--timeout=2m").CombinedOutput(); err != nil {
+			t.Logf("WARNING: waiting for rollout after restore: %s: %v", string(out), err)
+		}
+	})
 }
