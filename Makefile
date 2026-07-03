@@ -45,7 +45,7 @@ vet: ## Run go vet against code.
 
 .PHONY: unit
 unit: manifests generate setup-envtest ## Run unit tests (envtest). V=1 for verbose. RUN=<regex> to filter.
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $(if $(V),-v) $(if $(RUN),-run $(RUN)) $$(go list ./... | grep -v /test/e2e)
+	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $(if $(V),-v) $(if $(RUN),-run $(RUN)) $$(go list ./... | grep -v '/test/e2e$$')
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter.
