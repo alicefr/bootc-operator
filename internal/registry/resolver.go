@@ -3,36 +3,39 @@ package registry
 import (
 	"context"
 	"fmt"
+	"strings"
 
-	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/containers/image/v5/docker"
+	"github.com/containers/image/v5/types"
 )
 
-// GGCRResolver resolves image tags to digests using go-containerregistry.
-type GGCRResolver struct {
+// Resolver resolves image tags to digests using containers/image.
+type Resolver struct {
 	// AllowInsecure enables fallback to HTTP when the HTTPS connection
 	// to the registry fails.
 	AllowInsecure bool
 }
 
-func (r *GGCRResolver) Resolve(ctx context.Context, ref string) (string, error) {
-	parsed, err := name.ParseReference(ref)
+func (r *Resolver) Resolve(ctx context.Context, ref string) (string, error) {
+	if i := strings.LastIndex(ref, "@"); i >= 0 {
+		return ref[i+1:], nil
+	}
+
+	imgRef, err := docker.ParseReference("//" + ref)
 	if err != nil {
 		return "", fmt.Errorf("parsing reference %q: %w", ref, err)
 	}
-	if d, ok := parsed.(name.Digest); ok {
-		return d.DigestStr(), nil
-	}
-	desc, err := remote.Get(parsed, remote.WithContext(ctx))
-	if err != nil && r.AllowInsecure {
-		insecure, parseErr := name.ParseReference(ref, name.Insecure)
-		if parseErr != nil {
-			return "", fmt.Errorf("parsing reference %q: %w", ref, parseErr)
+
+	var sys *types.SystemContext
+	if r.AllowInsecure {
+		sys = &types.SystemContext{
+			DockerInsecureSkipTLSVerify: types.OptionalBoolTrue,
 		}
-		desc, err = remote.Get(insecure, remote.WithContext(ctx))
 	}
+
+	digest, err := docker.GetDigest(ctx, sys, imgRef)
 	if err != nil {
-		return "", fmt.Errorf("fetching manifest for %q: %w", ref, err)
+		return "", fmt.Errorf("fetching digest for %q: %w", ref, err)
 	}
-	return desc.Digest.String(), nil
+	return digest.String(), nil
 }

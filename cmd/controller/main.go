@@ -71,7 +71,7 @@ func main() {
 		Client:                mgr.GetClient(),
 		Scheme:                mgr.GetScheme(),
 		KubeClient:            kubeClient,
-		TagResolver:           &registry.GGCRResolver{AllowInsecure: allowInsecureRegistry},
+		TagResolver:           &registry.Resolver{AllowInsecure: allowInsecureRegistry},
 		TagResolutionInterval: tagResolutionInterval,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "bootcnodepool")
