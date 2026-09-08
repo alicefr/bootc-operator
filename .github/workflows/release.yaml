@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  release:
+    if: >-
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - name: Create GitHub App token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(cat VERSION)
+          if ! echo "${VERSION}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid version format: ${VERSION}"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=v${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create and push tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${TAG} already exists"
+            exit 1
+          fi
+          git tag -a -m "Release ${TAG}" "${TAG}"
+          git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "${TAG}"
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true # zizmor: ignore[cache-poisoning]
+
+      - name: Build and push container image
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          make buildimg IMG="${IMAGE}:${TAG}"
+          podman login -u "${ACTOR}" -p "${GH_TOKEN}" ghcr.io
+          podman push "${IMAGE}:${TAG}"
+
+      - name: Build install manifest
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: make release-manifest IMG="${IMAGE}:${TAG}"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          {
+            printf '## Installation\n\n'
+            printf '```bash\n'
+            printf 'kubectl apply -f https://github.com/%s/releases/download/%s/install.yaml\n' \
+              "${GITHUB_REPOSITORY}" "${TAG}"
+            printf '```\n'
+          } > notes.md
+          gh release create "${TAG}" \
+            --title "Release ${TAG}" \
+            --notes-file notes.md \
+            --generate-notes \
+            --draft \
+            install.yaml
