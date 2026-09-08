@@ -18,6 +18,7 @@ import (
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
 	"github.com/bootc-dev/bootc-operator/internal/controller"
 	"github.com/bootc-dev/bootc-operator/internal/registry"
+	"github.com/bootc-dev/bootc-operator/internal/version"
 )
 
 var (
@@ -63,6 +64,16 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	setupLog.Info(
+		"starting",
+		"component",
+		"controller",
+		"version",
+		version.Version,
+		"commit",
+		version.GitCommit,
+	)
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,

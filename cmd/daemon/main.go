@@ -21,6 +21,7 @@ import (
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
 	"github.com/bootc-dev/bootc-operator/internal/bootc"
 	"github.com/bootc-dev/bootc-operator/internal/daemon"
+	"github.com/bootc-dev/bootc-operator/internal/version"
 )
 
 var (
@@ -49,6 +50,16 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	setupLog.Info(
+		"starting",
+		"component",
+		"daemon",
+		"version",
+		version.Version,
+		"commit",
+		version.GitCommit,
+	)
 
 	nodeName := os.Getenv("NODE_NAME")
 	if nodeName == "" {
