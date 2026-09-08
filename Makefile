@@ -6,6 +6,10 @@ CONTAINER_TOOL ?= podman
 BINK_CLUSTER_NAME ?= e2e
 KUBECONFIG_BINK ?= ./kubeconfig-$(BINK_CLUSTER_NAME)
 ARTIFACTS ?= $(abspath _output/logs)
+VERSION ?= $(shell git describe --tags --always --dirty)
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD)
+LDFLAGS := -X github.com/bootc-dev/bootc-operator/internal/version.Version=$(VERSION) \
+           -X github.com/bootc-dev/bootc-operator/internal/version.GitCommit=$(GIT_COMMIT)
 DEFAULT_KUBE_MINOR ?= 1.35
 BINK_NODE_DISK_IMAGE ?= ghcr.io/bootc-dev/bink/node:v$(DEFAULT_KUBE_MINOR)-fedora-44-disk
 BINK_LOCAL_REGISTRY_NODE_IMAGE ?= registry.cluster.local:5000/node
@@ -105,11 +109,11 @@ build: build-manager build-daemon ## Build all binaries.
 
 .PHONY: build-manager
 build-manager: ## Build manager binary.
-	go build -o bin/manager ./cmd/controller/
+	go build -ldflags '$(LDFLAGS)' -o bin/manager ./cmd/controller/
 
 .PHONY: build-daemon
 build-daemon: ## Build daemon binary.
-	go build -o bin/daemon ./cmd/daemon/
+	go build -ldflags '$(LDFLAGS)' -o bin/daemon ./cmd/daemon/
 
 .PHONY: buildimg
 buildimg: ## Build container image.
