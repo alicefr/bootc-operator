@@ -119,6 +119,13 @@ build-daemon: ## Build daemon binary.
 buildimg: ## Build container image.
 	$(CONTAINER_TOOL) build -t $(IMG) .
 
+.PHONY: release-manifest
+release-manifest: kustomize yq ## Build install manifest (override IMG to set the image reference).
+	"$(KUSTOMIZE)" build config/default | \
+		"$(YQ)" '(select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager")).image = "$(IMG)"' | \
+		"$(YQ)" '(select(.kind == "DaemonSet") | .spec.template.spec.containers[] | select(.name == "daemon")).image = "$(IMG)"' \
+		> install.yaml
+
 .PHONY: build-update-image
 build-update-image: ## Build derived node images for update testing and push to bink registry.
 	@printf 'FROM localhost:5000/node:latest\nRUN touch /usr/share/update-marker\n' | \
