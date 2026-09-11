@@ -54,7 +54,7 @@ type staticTagResolver struct {
 	digest string
 }
 
-func (r staticTagResolver) Resolve(context.Context, string) (string, error) {
+func (r staticTagResolver) Resolve(context.Context, string, []byte) (string, error) {
 	return r.digest, nil
 }
 
@@ -409,7 +409,7 @@ func TestResolveTargetDigestReportsTagChange(t *testing.T) {
 		TagResolutionInterval: time.Hour,
 	}
 
-	result, changed, err := reconciler.resolveTargetDigest(context.Background(), pool)
+	result, changed, err := reconciler.resolveTargetDigest(context.Background(), pool, nil)
 
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(changed).To(BeTrue())
