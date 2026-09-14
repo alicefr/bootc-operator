@@ -292,6 +292,7 @@ func (s *stageOp) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.retries = 0
+	s.image = ""
 }
 
 // run executes bootc stage in a goroutine. The results are delivered via the done channel.
@@ -329,8 +330,8 @@ func (s *stageOp) run(
 	if err != nil {
 		log.Error(err, "Stage failed")
 		s.err = err
+		s.image = ""
 	}
-	s.image = ""
 	s.cancel = nil
 	s.mu.Unlock()
 
