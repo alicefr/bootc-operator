@@ -22,6 +22,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
+	"github.com/bootc-dev/bootc-operator/internal/image"
 )
 
 // Hardcode to 2 for now; might make this configurable later, or dynamically
@@ -490,7 +491,7 @@ func findUnhealthySlots(rs *rolloutState, targetDigest string) []unhealthySlot {
 		// shouldn't happen because clearly the daemon came up at least
 		// once in this node's history to be able to get to a reboot
 		// slot. And so Booted should always be set here.
-		if bn.Status.Booted == nil || bn.Status.Booted.ImageDigest == targetDigest {
+		if bn.Status.Booted == nil || image.InfoMatchesDigest(bn.Status.Booted, targetDigest) {
 			result = append(result, unhealthySlot{name: bn.Name, reason: "Degraded"})
 		}
 	}
@@ -729,7 +730,7 @@ func classifyNode(bn *bootcv1alpha1.BootcNode) (nodeState, error) {
 		return 0, fmt.Errorf("non-digested desiredImage %q", bn.Spec.DesiredImage)
 	}
 
-	if digested.Digest().String() == bn.Status.Booted.ImageDigest {
+	if image.InfoMatchesDigest(bn.Status.Booted, digested.Digest().String()) {
 		// Image matches; nothing for the controller to act on
 		// regardless of whether the daemon has settled yet.
 		return nodeStateUpToDate, nil
