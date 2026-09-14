@@ -62,6 +62,7 @@ type BootcNodeReconciler struct {
 	HostRoot      string
 	Executor      bootc.Executor
 	StatusWatcher *StatusWatcher
+	APIReader     client.Reader
 
 	inflight  stageOp
 	stageDone chan event.GenericEvent
@@ -403,7 +404,7 @@ func (r *BootcNodeReconciler) syncPullSecret(
 		Namespace: bn.Spec.PullSecretRef.Namespace,
 	}
 	var secret corev1.Secret
-	if err := r.Get(ctx, key, &secret); err != nil {
+	if err := r.APIReader.Get(ctx, key, &secret); err != nil {
 		log.Error(err, "Failed to fetch pull secret, continuing", "secret", key)
 		return
 	}
