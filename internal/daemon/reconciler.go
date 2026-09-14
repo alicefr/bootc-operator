@@ -31,6 +31,7 @@ import (
 
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
 	"github.com/bootc-dev/bootc-operator/internal/bootc"
+	"github.com/bootc-dev/bootc-operator/internal/image"
 )
 
 const (
@@ -196,7 +197,7 @@ func (r *BootcNodeReconciler) reconcileBootcNode(
 
 	// Nothing to do the desired image matches the booted ones.
 	// Reset the stage backoff to start from a clean state.
-	if digested.Digest().String() == bn.Status.Booted.ImageDigest {
+	if image.InfoMatchesDigest(bn.Status.Booted, digested.Digest().String()) {
 		r.inflight.reset()
 		return reconcileResult{}, nil
 	}
@@ -373,7 +374,7 @@ func (r *BootcNodeReconciler) classifyAction(
 	desiredImage string,
 ) updateAction {
 	desiredDigest := digested.Digest().String()
-	alreadyStaged := bn.Status.Staged != nil && bn.Status.Staged.ImageDigest == desiredDigest
+	alreadyStaged := image.InfoMatchesDigest(bn.Status.Staged, desiredDigest)
 	if !alreadyStaged {
 		if r.inflight.isInFlight(desiredImage) {
 			return actionAwaitStage
