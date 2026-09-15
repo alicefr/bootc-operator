@@ -37,6 +37,7 @@ const (
 // BootcNodePool selecting it, and verifies that a BootcNode is created
 // and the node is labeled bootc.dev/managed.
 func TestControllerMembership(t *testing.T) {
+	e2eutil.Providers(t, "bink")
 	g := NewWithT(t)
 	g.SetDefaultEventuallyTimeout(pollTimeout)
 	g.SetDefaultEventuallyPollingInterval(pollInterval)
@@ -111,6 +112,7 @@ func TestControllerMembership(t *testing.T) {
 // original image, then updates the pool to a new image and verifies the
 // full update lifecycle: staging, reboot, and idle with the new image.
 func TestUpdateReboot(t *testing.T) {
+	e2eutil.Providers(t, "bink")
 	g := NewWithT(t)
 	g.SetDefaultEventuallyTimeout(pollTimeout)
 	g.SetDefaultEventuallyPollingInterval(pollInterval)
@@ -305,6 +307,7 @@ func TestUpdateReboot(t *testing.T) {
 // the controller resolves the tag to a digest, then retags the image
 // and verifies re-resolution triggers a rollout.
 func TestTagResolution(t *testing.T) {
+	e2eutil.Providers(t, "bink")
 	g := NewWithT(t)
 	g.SetDefaultEventuallyTimeout(pollTimeout)
 	g.SetDefaultEventuallyPollingInterval(pollInterval)
@@ -412,6 +415,7 @@ func TestTagResolution(t *testing.T) {
 // image and that the non-rebooting node does not wastefully reboot into the
 // first update image.
 func TestMidRolloutImageChange(t *testing.T) {
+	e2eutil.Providers(t, "bink")
 	g := NewWithT(t)
 	g.SetDefaultEventuallyTimeout(pollTimeout)
 	g.SetDefaultEventuallyPollingInterval(pollInterval)
@@ -609,6 +613,7 @@ func getBootCount(t *testing.T, env *e2eutil.Env, ctx context.Context, nodeName 
 // pool paused, verifies the node stages but does not reboot, then resumes
 // and verifies the update completes.
 func TestPauseResume(t *testing.T) {
+	e2eutil.Providers(t, "bink")
 	g := NewWithT(t)
 	g.SetDefaultEventuallyTimeout(pollTimeout)
 	g.SetDefaultEventuallyPollingInterval(pollInterval)
@@ -733,6 +738,7 @@ func TestPauseResume(t *testing.T) {
 // original image, then updates to a non-existing image and verifies the
 // node enters degraded state and the update does not proceed.
 func TestNonExistingImage(t *testing.T) {
+	e2eutil.Providers(t, "bink")
 	g := NewWithT(t)
 	g.SetDefaultEventuallyTimeout(pollTimeout)
 	g.SetDefaultEventuallyPollingInterval(pollInterval)
@@ -819,6 +825,7 @@ func TestNonExistingImage(t *testing.T) {
 // registry shares storage with the unauthenticated one (port 5000),
 // so the update image is already available at both endpoints.
 func TestPullSecretAuth(t *testing.T) {
+	e2eutil.Providers(t, "bink", "eks")
 	g := NewWithT(t)
 	g.SetDefaultEventuallyTimeout(pollTimeout)
 	g.SetDefaultEventuallyPollingInterval(pollInterval)
@@ -831,19 +838,20 @@ func TestPullSecretAuth(t *testing.T) {
 	ctx := context.Background()
 	nodeName := env.AddNode(t)
 
-	// The auth registry shares storage with the unauthenticated
-	// registry, so the update image pushed to localhost:5000 is
-	// already visible at auth-registry.cluster.local:5001.
+	// For bink, the auth registry (port 5001) shares storage with the
+	// unauthenticated registry (port 5000), so we rewrite the image ref
+	// to go through the auth endpoint. For EKS, the update image already
+	// requires authentication.
+	authImageRef := env.AuthImageRef()
 	digest := env.NodeImageUpdateDigest()
+	registryHost := env.RegistryHost()
 
-	// Create a dockerconfigjson Secret with credentials for the
-	// in-cluster auth registry hostname.
 	authStr := base64.StdEncoding.EncodeToString(
 		[]byte(env.RegistryUser() + ":" + env.RegistryPassword()),
 	)
 	dockerCfg := fmt.Sprintf(
-		`{"auths":{"auth-registry.cluster.local:5001":{"auth":"%s"}}}`,
-		authStr,
+		`{"auths":{%q:{"auth":"%s"}}}`,
+		registryHost, authStr,
 	)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -858,8 +866,6 @@ func TestPullSecretAuth(t *testing.T) {
 	g.Expect(env.Client.Create(ctx, secret)).To(Succeed())
 	t.Cleanup(func() { _ = env.Client.Delete(ctx, secret) })
 
-	// Create a pool targeting the auth registry with the pull secret.
-	authImageRef := "auth-registry.cluster.local:5001/node@" + digest
 	pool := env.NewPool("pullsecret", authImageRef,
 		testutil.WithPullSecret(secret.Name, secret.Namespace),
 	)
@@ -907,6 +913,7 @@ func TestPullSecretAuth(t *testing.T) {
 // verifies it resumes and completes the interrupted rollout. Covers scenario 5
 // of #69 (kill the controller during a roll-out).
 func TestControllerRecovery(t *testing.T) {
+	e2eutil.Providers(t, "bink")
 	g := NewWithT(t)
 	g.SetDefaultEventuallyTimeout(pollTimeout)
 	g.SetDefaultEventuallyPollingInterval(pollInterval)
