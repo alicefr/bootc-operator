@@ -6,6 +6,7 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled]
 
 env:
   BINK_COMMIT: e7d4574fdc610a9fd9bd067aff984516ec7c507d
@@ -17,7 +18,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-permissions:
+    uses: $/.github/workflows/check-permissions.yml
+
   unit:
+    needs: [check-permissions]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -48,6 +53,7 @@ jobs:
         run: make lint
 
   build-bink:
+    needs: [check-permissions]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -84,6 +90,7 @@ jobs:
           path: bink
 
   build-operator:
+    needs: [check-permissions]
     runs-on: ubuntu-latest
     permissions:
       contents: read

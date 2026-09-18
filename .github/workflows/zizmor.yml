@@ -5,11 +5,16 @@ on:
     branches: [main]
   pull_request:
     branches: ["**"]
+    types: [opened, synchronize, reopened, labeled]
 
 permissions: {}
 
 jobs:
+  check-permissions:
+    uses: $/.github/workflows/check-permissions.yml
+
   zizmor:
+    needs: [check-permissions]
     name: Scan GHA workflows
     runs-on: ubuntu-24.04
     permissions:
