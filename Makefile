@@ -1,5 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= bootc-operator:dev
+IMAGE_PULL_POLICY ?=
+IMAGE_PULL_SECRET ?=
 CONTAINER_TOOL ?= podman
 # Bink cluster settings. deploy-bink and e2e share the same cluster by default.
 # To use a separate dev cluster: make deploy-bink BINK_CLUSTER_NAME=dev
@@ -158,6 +160,8 @@ deploy: manifests kustomize yq ## Deploy controller to the K8s cluster specified
 		"$(YQ)" '(select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager")).image = "$(IMG)"' | \
 		"$(YQ)" '(select(.kind == "DaemonSet") | .spec.template.spec.containers[] | select(.name == "daemon")).image = "$(IMG)"' | \
 		$(if $(MANAGER_EXTRA_ARGS),"$(YQ)" '(select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "manager")).args += [$(MANAGER_EXTRA_ARGS)]' |) \
+		$(if $(IMAGE_PULL_POLICY),"$(YQ)" '(select(.kind == "Deployment" or .kind == "DaemonSet") | .spec.template.spec.containers[].imagePullPolicy) = "$(IMAGE_PULL_POLICY)"' |) \
+		$(if $(IMAGE_PULL_SECRET),"$(YQ)" '(select(.kind == "Deployment" or .kind == "DaemonSet") | .spec.template.spec.imagePullSecrets) = [{"name": "$(IMAGE_PULL_SECRET)"}]' |) \
 		"$(KUBECTL)" apply --server-side -f -
 
 .PHONY: undeploy
