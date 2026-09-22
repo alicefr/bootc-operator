@@ -2,8 +2,7 @@ name: Release
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main, release-*]
     types: [closed]
   workflow_dispatch: {}
 
