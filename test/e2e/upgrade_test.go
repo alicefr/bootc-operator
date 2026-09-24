@@ -15,12 +15,10 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
-	"github.com/onsi/gomega/types"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	sigsyaml "sigs.k8s.io/yaml"
@@ -86,7 +84,7 @@ func TestOperatorUpgrade(t *testing.T) {
 	pool := env.NewPool("upgrade", env.NodeImageDigestedPullSpec())
 	g.Expect(env.Client.Create(ctx, pool)).To(Succeed())
 
-	waitForNodeIdle(t, g, ctx, env.Client, nodeName, 3*time.Minute)
+	testutil.WaitForNodeIdle(t, g, ctx, env.Client, nodeName, 3*time.Minute)
 
 	t.Logf("Node %q is Idle with released operator", nodeName)
 
@@ -97,7 +95,7 @@ func TestOperatorUpgrade(t *testing.T) {
 	t.Logf("Upgraded operator to current version via manifest apply")
 
 	// Verify the pre-existing pool and node survived the upgrade.
-	waitForNodeIdle(t, g, ctx, env.Client, nodeName, 3*time.Minute)
+	testutil.WaitForNodeIdle(t, g, ctx, env.Client, nodeName, 3*time.Minute)
 	g.Eventually(fetchPoolStatus(ctx, env.Client, pool)).
 		Should(poolAllUpdated(1, env.NodeImageDigest()))
 
@@ -115,7 +113,7 @@ func TestOperatorUpgrade(t *testing.T) {
 
 	t.Logf("Patched pool to update image %s", updateRef)
 
-	waitForNodeIdle(t, g, ctx, env.Client, nodeName, 5*time.Minute,
+	testutil.WaitForNodeIdle(t, g, ctx, env.Client, nodeName, 5*time.Minute,
 		HaveField("Booted", HaveField("ImageDigest", env.NodeImageUpdateDigest())),
 	)
 
@@ -384,32 +382,6 @@ func waitForOperatorReady(
 		g.Expect(d.Status.AvailableReplicas).To(Equal(int32(1)))
 	}).WithTimeout(3*time.Minute).Should(Succeed(),
 		"expected operator deployment to be ready")
-}
-
-func waitForNodeIdle(
-	t *testing.T,
-	g Gomega,
-	ctx context.Context,
-	c client.Client,
-	nodeName string,
-	timeout time.Duration,
-	extraMatchers ...types.GomegaMatcher,
-) {
-	t.Helper()
-	matchers := []types.GomegaMatcher{
-		HaveField("Booted", Not(BeNil())),
-		HaveField("Conditions", ContainElement(And(
-			HaveField("Type", bootcv1alpha1.NodeIdle),
-			HaveField("Status", metav1.ConditionTrue),
-			HaveField("Reason", bootcv1alpha1.NodeReasonIdle),
-		))),
-	}
-	matchers = append(matchers, extraMatchers...)
-	g.Eventually(func() (bootcv1alpha1.BootcNodeStatus, error) {
-		var bn bootcv1alpha1.BootcNode
-		err := c.Get(ctx, client.ObjectKey{Name: nodeName}, &bn)
-		return bn.Status, err
-	}).WithTimeout(timeout).Should(And(matchers...))
 }
 
 func operatorDeployKey() client.ObjectKey {
