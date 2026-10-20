@@ -176,9 +176,10 @@ func NewNode(name, desiredImage string, opts ...NodeOption) *bootcv1alpha1.Bootc
 // WithBootedDigest sets the booted image digest in the node's status.
 func WithBootedDigest(digest string) NodeOption {
 	return func(node *bootcv1alpha1.BootcNode) {
-		node.Status.Booted = &bootcv1alpha1.ImageInfo{
-			ImageDigest: digest,
+		if node.Status.Booted == nil {
+			node.Status.Booted = &bootcv1alpha1.ImageInfo{}
 		}
+		node.Status.Booted.ImageDigest = digest
 	}
 }
 
