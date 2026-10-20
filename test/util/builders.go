@@ -183,6 +183,26 @@ func WithBootedDigest(digest string) NodeOption {
 	}
 }
 
+// WithBootedImage sets the booted image pullspec in the node's status.
+func WithBootedImage(image string) NodeOption {
+	return func(node *bootcv1alpha1.BootcNode) {
+		if node.Status.Booted == nil {
+			node.Status.Booted = &bootcv1alpha1.ImageInfo{}
+		}
+		node.Status.Booted.Image = image
+	}
+}
+
+// WithBootedVersion sets the booted image version in the node's status.
+func WithBootedVersion(version string) NodeOption {
+	return func(node *bootcv1alpha1.BootcNode) {
+		if node.Status.Booted == nil {
+			node.Status.Booted = &bootcv1alpha1.ImageInfo{}
+		}
+		node.Status.Booted.Version = version
+	}
+}
+
 // WithNodeCondition appends a condition to the node's status.
 func WithNodeCondition(condType string, status metav1.ConditionStatus, reason string) NodeOption {
 	return func(node *bootcv1alpha1.BootcNode) {
