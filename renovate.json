@@ -2,5 +2,18 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>bootc-dev/infra:renovate-shared-config.json"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yaml$/"],
+      "matchStrings": [
+        "(?:BINK_COMMIT|bink-commit):\\s+(?<currentDigest>[a-f0-9]{40})"
+      ],
+      "depNameTemplate": "bootc-dev/bink",
+      "datasourceTemplate": "git-refs",
+      "packageNameTemplate": "https://github.com/bootc-dev/bink",
+      "currentValueTemplate": "main"
+    }
   ]
 }
