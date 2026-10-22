@@ -14,6 +14,15 @@
       "datasourceTemplate": "git-refs",
       "packageNameTemplate": "https://github.com/bootc-dev/bink",
       "currentValueTemplate": "main"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yaml$/"],
+      "matchStrings": [
+        "kube-minor: \"(?<currentValue>\\d+\\.\\d+)\"\\s+digest: (?<currentDigest>sha256:[a-f0-9]+)"
+      ],
+      "depNameTemplate": "ghcr.io/bootc-dev/bink/node",
+      "datasourceTemplate": "docker"
     }
   ]
 }
