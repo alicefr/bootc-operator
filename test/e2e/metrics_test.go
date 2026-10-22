@@ -154,6 +154,14 @@ func scrapeMetrics(
 		"--overrides", fmt.Sprintf(`{
 			"spec": {
 				"serviceAccountName": "%s",
+				"nodeSelector": {
+					"node-role.kubernetes.io/control-plane": ""
+				},
+				"tolerations": [{
+					"key": "node-role.kubernetes.io/control-plane",
+					"operator": "Exists",
+					"effect": "NoSchedule"
+				}],
 				"containers": [{
 					"name": "curl",
 					"image": "%s",
