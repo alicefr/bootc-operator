@@ -19,7 +19,7 @@ E2E_REGISTRY_USER ?= e2e-user
 E2E_REGISTRY_PASSWORD ?= e2e-password
 # Released operator for upgrade testing (TestOperatorUpgrade).
 # Override RELEASED_OPERATOR_IMG for downstream images.
-RELEASED_OPERATOR_TAG ?= v0.2.1
+RELEASED_OPERATOR_TAG ?= v0.2.2
 RELEASED_OPERATOR_IMG ?= ghcr.io/bootc-dev/bootc-operator:$(RELEASED_OPERATOR_TAG)
 IMG_BINK_RELEASED ?= registry.cluster.local:5000/bootc-operator-released:latest
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
