@@ -6,6 +6,15 @@
   "customManagers": [
     {
       "customType": "regex",
+      "managerFilePatterns": ["/^Makefile$/"],
+      "matchStrings": [
+        "(?:^|\\n)RELEASED_OPERATOR_TAG[ \\t]+\\?=[ \\t]*(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "bootc-dev/bootc-operator",
+      "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
       "managerFilePatterns": ["/^\\.github/workflows/ci\\.yaml$/"],
       "matchStrings": [
         "(?:BINK_COMMIT|bink-commit):\\s+(?<currentDigest>[a-f0-9]{40})"
