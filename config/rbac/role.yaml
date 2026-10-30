@@ -86,6 +86,16 @@ rules:
   resources:
   - secrets
   verbs:
+  - create
   - get
   - list
   - watch
+- apiGroups:
+  - ""
+  resourceNames:
+  - bootc-pull-secrets
+  resources:
+  - secrets
+  verbs:
+  - patch
+  - update

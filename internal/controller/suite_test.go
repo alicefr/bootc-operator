@@ -100,6 +100,15 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	if err := (&PullSecretAggregator{
+		Client:               mgr.GetClient(),
+		Namespace:            testutil.OperatorNamespaceName,
+		PullSecretNamespaces: pullSecretNamespaces,
+	}).SetupWithManager(mgr); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to setup pull secret aggregator: %v\n", err)
+		os.Exit(1)
+	}
+
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
 
 	mgrDone := make(chan struct{})
