@@ -20,8 +20,11 @@ spec:
         description: |-
           BootcOperatorConfig configures the controller and node daemons in a cluster.
           The optional resource is administrator-owned and may have any valid name.
-          The operator rejects multiple configurations at startup. Changes take effect
-          when the affected pods restart; supplied fields take precedence over CLI flags.
+          The operator rejects multiple configurations at startup. While it runs with
+          more than one, it keeps the settings it had until exactly one remains.
+          Changes apply to the running controller and daemons; supplied fields take
+          precedence over CLI flags, and omitted ones, or all of them once the
+          configuration is deleted, revert to them.
         properties:
           apiVersion:
             description: |-
@@ -41,8 +44,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the configuration consumed when operator processes
-              start.
+            description: spec defines the configuration the operator applies.
             properties:
               controller:
                 default: {}

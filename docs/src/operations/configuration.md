@@ -96,10 +96,21 @@ Adjust the ServiceAccount name and namespace for your installation;
 For Helm-managed permissions, see
 [Helm configuration](../helm.md#pool-pull-secret-namespaces).
 
-After granting permissions and applying the configuration, [restart the
-controller](#applying-configuration). To remove access, remove the namespace
-from the CR list (or Helm/CLI setting when the CR field is omitted), then
-restart before deleting its Role and RoleBinding.
+The controller applies a change to the list while it runs. Grant the
+permissions before adding a namespace, or after: it checks again about every 30
+seconds, so the namespace becomes usable within that time of the grant. Until
+then pools that reference it report a `SecretError`, and the namespaces it can
+list keep working. The same check notices a Role or RoleBinding that is later
+removed: the namespace becomes unavailable and its pools degrade.
+
+To remove a namespace, remove it from the CR list (or the Helm/CLI setting when
+the CR field is omitted). The controller stops reading it at once, pools that
+reference it report that the namespace is not allowed, and its entries leave
+the aggregated pull secret. Copies already on the nodes stay until the
+aggregated Secret reaches them, and the daemons then remove the credentials at
+the next staging. Rotate the credentials and delete the namespace's Role and
+RoleBinding if the access has to be revoked, as removing a namespace from the
+list does not.
 
 ## Applying configuration
 
@@ -141,20 +152,10 @@ new settings take effect at once. Each daemon applies
 `daemon.statusPollPeriodSeconds` the same way: if it is polling because
 filesystem notifications are unavailable, the next poll is one new interval
 from the change, and otherwise the new interval is kept for when polling
-starts. The other setting, `controller.pullSecretNamespaces`, is read once
-when the controller starts. Editing it does not restart pods or change
-running processes, so restart the controller after changing it:
-
-```shell
-kubectl -n bootc-operator rollout restart deployment/bootc-operator-controller-manager
-kubectl -n bootc-operator rollout status deployment/bootc-operator-controller-manager --timeout=3m
-```
-
-For Helm installations, use `deployment/bootc-operator-controller` instead of
-`deployment/bootc-operator-controller-manager` in the restart and status commands.
-Use the workload names and namespace from your installation if customized.
-Daemon pods run only on nodes selected by a pool. New pods read the current
-configuration when they start.
+starts. The controller also applies `controller.pullSecretNamespaces` while it
+runs, see [Pull secret namespaces](#pull-secret-namespaces). No pod restarts
+for any of the settings. Daemon pods run only on nodes selected by a pool, and
+new ones read the current configuration when they start.
 
 ## Precedence and startup failures
 
@@ -173,13 +174,13 @@ More than one configuration, a missing CRD, denied API access, or a connection
 failure stops startup with an error. Remove extra configurations, install the
 matching CRD and permissions, or restore API connectivity before restarting.
 A running process keeps its loaded settings during a later API outage.
-If more than one configuration exists while the controller runs, it keeps
-applying the settings it had until exactly one remains.
+If more than one configuration exists while the controller or a daemon runs, it keeps
+the settings it had until exactly one remains.
 
 ## Reverting and upgrading
 
 Restore a field's previous value, or remove it to use the CLI value or built-in
-default. Restart the controller if the field is `pullSecretNamespaces`. To remove all overrides from this resource:
+default. To remove all overrides from this resource:
 
 ```shell
 kubectl delete bootcoperatorconfig cluster
@@ -187,8 +188,7 @@ kubectl delete bootcoperatorconfig cluster
 
 Replace `cluster` with the resource's actual name if you used a different one.
 The controller and daemons then go back to the CLI value or built-in default
-of the settings they apply live. Restart the controller as above if the
-resource set `pullSecretNamespaces`. Explicit command-line flags still apply.
+of every setting, without a restart. Explicit command-line flags still apply.
 
 Reapplying installation manifests during an ordinary upgrade preserves the
 configuration resource. For Helm installation and removal behavior, see the

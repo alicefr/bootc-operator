@@ -4,11 +4,13 @@ package pullsecret
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
@@ -88,4 +90,15 @@ func (s *SourceReader) Read(
 		return "", nil, fmt.Errorf("pull secret %s/%s: %w", ref.Namespace, ref.Name, err)
 	}
 	return key, data, nil
+}
+
+// Unreadable reports whether err from Read shows that the source secret
+// cannot be read for good, as opposed to a failure that may pass: the Secret
+// is gone, the controller is not allowed to read it, or its namespace is not
+// available. The aggregated Secret must not keep what it held for it.
+func Unreadable(err error) bool {
+	var notAllowed *NamespaceNotAllowedError
+	var unavailable *NamespaceUnavailableError
+	return errors.As(err, &notAllowed) || errors.As(err, &unavailable) ||
+		apierrors.IsNotFound(err) || apierrors.IsForbidden(err)
 }

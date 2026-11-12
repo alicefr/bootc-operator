@@ -6,10 +6,6 @@ package config
 
 import (
 	"flag"
-	"fmt"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/go-logr/logr"
 
@@ -30,57 +26,6 @@ func ExplicitFlags(fs *flag.FlagSet) map[string]bool {
 	explicit := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
 	return explicit
-}
-
-// ApplyToFlags applies fields supported by this process to parsed flag values.
-// Supplied resource fields override CLI values; omitted fields retain CLI values
-// or built-in defaults. Setting Flag.Value directly does not mark CR values as CLI flags.
-// cfg must have been validated by Load.
-func ApplyToFlags(fs *flag.FlagSet, cfg *bootcv1alpha1.BootcOperatorConfig) error {
-	if cfg == nil {
-		return nil
-	}
-	set := func(name, value string) error {
-		f := fs.Lookup(name)
-		if f == nil {
-			return nil // The other process may not register this flag.
-		}
-		if err := f.Value.Set(value); err != nil {
-			return fmt.Errorf("apply BootcOperatorConfig/%s to --%s: %w", cfg.Name, name, err)
-		}
-		return nil
-	}
-	if c := cfg.Spec.Controller; c != nil {
-		if c.PullSecretNamespaces != nil {
-			if err := set(
-				PullSecretNamespacesFlag,
-				strings.Join(c.PullSecretNamespaces, ","),
-			); err != nil {
-				return err
-			}
-		}
-		if c.AllowInsecureRegistry != nil {
-			if err := set(
-				AllowInsecureRegistryFlag,
-				strconv.FormatBool(*c.AllowInsecureRegistry),
-			); err != nil {
-				return err
-			}
-		}
-		if c.TagResolutionPeriodSeconds != nil {
-			period := time.Duration(*c.TagResolutionPeriodSeconds) * time.Second
-			if err := set(TagResolutionIntervalFlag, period.String()); err != nil {
-				return err
-			}
-		}
-	}
-	if d := cfg.Spec.Daemon; d != nil && d.StatusPollPeriodSeconds != nil {
-		period := time.Duration(*d.StatusPollPeriodSeconds) * time.Second
-		if err := set(BootcPollIntervalFlag, period.String()); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // LogSource records the selected resource and supplied CLI flags without logging

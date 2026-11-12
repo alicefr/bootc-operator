@@ -41,10 +41,6 @@ type PullSecretAggregator struct {
 	// Namespace is the operator namespace, which holds the aggregated
 	// Secret.
 	Namespace string
-
-	// PullSecretNamespaces is the allowlist of namespaces pools may
-	// reference pull secrets from.
-	PullSecretNamespaces []string
 }
 
 // +kubebuilder:rbac:groups="",namespace=system,resources=secrets,verbs=get;list;watch;create
@@ -70,6 +66,7 @@ func (r *PullSecretAggregator) SetupWithManager(mgr ctrl.Manager) error {
 				return client.ObjectKeyFromObject(obj) == r.secretKey()
 			}))).
 		WatchesRawSource(r.Secrets.Source(handler.EnqueueRequestsFromMapFunc(r.mapSecret))).
+		WatchesRawSource(r.Secrets.NamespaceSource(handler.EnqueueRequestsFromMapFunc(enqueueAll))).
 		Complete(r)
 }
 
@@ -170,7 +167,7 @@ func (r *PullSecretAggregator) desiredData(ctx context.Context) (map[string][]by
 		return nil, fmt.Errorf("listing BootcNodePools: %w", err)
 	}
 
-	reader := SourceReader{Reader: r.Secrets, Namespaces: r.PullSecretNamespaces}
+	reader := SourceReader{Reader: r.Secrets, Namespaces: r.Secrets.Namespaces()}
 	desired := map[string][]byte{}
 	for i := range pools.Items {
 		ref := pools.Items[i].Spec.PullSecretRef
@@ -179,7 +176,7 @@ func (r *PullSecretAggregator) desiredData(ctx context.Context) (map[string][]by
 		}
 		key, data, err := reader.Read(ctx, ref)
 		var fetchErr *FetchError
-		if errors.As(err, &fetchErr) && !apierrors.IsNotFound(err) {
+		if errors.As(err, &fetchErr) && !Unreadable(err) {
 			return nil, err
 		}
 		if err == nil {

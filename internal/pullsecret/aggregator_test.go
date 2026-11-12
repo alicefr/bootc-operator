@@ -4,8 +4,10 @@ package pullsecret
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -260,4 +262,40 @@ func TestPullSecretAggregatorRepairsSecret(t *testing.T) {
 	// A deleted Secret is recreated.
 	g.Expect(k8sClient.Delete(ctx, &aggregated)).To(Succeed())
 	g.Eventually(aggregatedData).WithArguments(ctx).Should(HaveKeyWithValue(key, data))
+}
+
+func TestPullSecretAggregatorFollowsAllowedNamespaces(t *testing.T) {
+	g := NewWithT(t)
+	g.SetDefaultEventuallyTimeout(pollTimeout)
+	g.SetDefaultEventuallyPollingInterval(pollInterval)
+	ctx := context.Background()
+	const namespace = "agg-live-ns"
+	key := namespace + "_agg-live-secret"
+	createNamespace(t, namespace)
+
+	data := []byte(`{"auths":{"live.example.com":{}}}`)
+	secret := testutil.NewDockerConfigSecret("agg-live-secret", namespace, data)
+	g.Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, secret) })
+	pool := newAggregatorPool("agg-live-pool", secret.Name, secret.Namespace)
+	g.Expect(k8sClient.Create(ctx, pool)).To(Succeed())
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, pool) })
+	operatorOnly := suiteSourceCache.Namespaces()
+	t.Cleanup(func() { suiteSourceCache.SetNamespaces(operatorOnly) })
+
+	// A namespace that is not allowed contributes nothing.
+	g.Consistently(aggregatedData).WithArguments(ctx).
+		WithTimeout(time.Second).ShouldNot(HaveKey(key))
+
+	// Allowing it adds the Secret without a restart, and follows rotations.
+	suiteSourceCache.SetNamespaces(append(slices.Clone(operatorOnly), namespace))
+	g.Eventually(aggregatedData).WithArguments(ctx).Should(HaveKeyWithValue(key, data))
+	rotated := []byte(`{"auths":{"rotated.example.com":{}}}`)
+	secret.Data[corev1.DockerConfigJsonKey] = rotated
+	g.Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+	g.Eventually(aggregatedData).WithArguments(ctx).Should(HaveKeyWithValue(key, rotated))
+
+	// Disallowing it removes the key again, whatever else the aggregate holds.
+	suiteSourceCache.SetNamespaces(operatorOnly)
+	g.Eventually(aggregatedData).WithArguments(ctx).ShouldNot(HaveKey(key))
 }

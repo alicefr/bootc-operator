@@ -207,13 +207,15 @@ func TestBootcOperatorConfigEmptyNamespaces(t *testing.T) {
 		loaded, err := operatorconfig.Load(ctx, testEnv.Config, k8sClient.Scheme())
 		g.Expect(err).NotTo(HaveOccurred())
 		fs := flag.NewFlagSet(t.Name(), flag.ContinueOnError)
-		namespaces := fs.String(operatorconfig.PullSecretNamespacesFlag, "", "")
-		interval := fs.Duration(operatorconfig.TagResolutionIntervalFlag, 5*time.Minute, "")
+		fs.String(operatorconfig.PullSecretNamespacesFlag, "", "")
+		fs.Duration(operatorconfig.TagResolutionIntervalFlag, 5*time.Minute, "")
 		g.Expect(fs.Parse([]string{"--pull-secret-namespaces=team-a", "--tag-resolution-interval=10s"})).
 			To(Succeed())
-		g.Expect(operatorconfig.ApplyToFlags(fs, loaded)).To(Succeed())
-		g.Expect(*namespaces).To(BeEmpty())
-		g.Expect(*interval).
+		fallback, err := operatorconfig.SettingsFromFlags(fs)
+		g.Expect(err).NotTo(HaveOccurred())
+		settings := operatorconfig.Resolve(fallback, loaded)
+		g.Expect(settings.PullSecretNamespaces).To(BeEmpty())
+		g.Expect(settings.TagResolutionInterval).
 			To(Equal(5*time.Minute), "explicit default-valued fields override CLI")
 	}
 	cfg.Spec.Controller.PullSecretNamespaces = nil

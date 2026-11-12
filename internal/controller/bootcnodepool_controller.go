@@ -74,13 +74,9 @@ type BootcNodePoolReconciler struct {
 	// with tagResolutionInterval.
 	TagResolutionInterval time.Duration
 
-	// PullSecretNamespaces is the allowlist of namespaces pools may
-	// reference pull secrets from. SourceSecrets must cover the same
-	// namespaces.
-	PullSecretNamespaces []string
-
 	// SourceSecrets reads the pull secrets pools reference and reports their
-	// changes.
+	// changes. Its namespaces are the ones pools may reference pull secrets
+	// from.
 	SourceSecrets pullsecret.SourceSecrets
 
 	// drainCh receives events from drain goroutines to re-enqueue the
@@ -136,6 +132,9 @@ func (r *BootcNodePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.mapNodeToPoolRequests), builder.WithPredicates(nodePredicates())).
 		WatchesRawSource(r.SourceSecrets.Source(
 			handler.EnqueueRequestsFromMapFunc(r.mapSecretToPoolRequests),
+		)).
+		WatchesRawSource(r.SourceSecrets.NamespaceSource(
+			handler.EnqueueRequestsFromMapFunc(r.mapNamespaceToPoolRequests),
 		)).
 		WatchesRawSource(source.Channel(r.drainCh, &handler.EnqueueRequestForObject{})).
 		WatchesRawSource(source.Channel(
@@ -318,6 +317,29 @@ func (r *BootcNodePoolReconciler) mapSecretToPoolRequests(
 		requests = append(requests, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: pools.Items[i].Name},
 		})
+	}
+	return requests
+}
+
+// mapNamespaceToPoolRequests enqueues the pools whose pull secret is in the
+// namespace obj is named after, for when it becomes available or unavailable.
+func (r *BootcNodePoolReconciler) mapNamespaceToPoolRequests(
+	ctx context.Context,
+	obj client.Object,
+) []reconcile.Request {
+	var pools bootcv1alpha1.BootcNodePoolList
+	if err := r.List(ctx, &pools); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to list BootcNodePools in namespace mapper")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range pools.Items {
+		if ref := pools.Items[i].Spec.PullSecretRef; ref != nil && ref.Namespace == obj.GetName() {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: pools.Items[i].Name},
+			})
+		}
 	}
 	return requests
 }
@@ -849,7 +871,10 @@ func (r *BootcNodePoolReconciler) fetchPullSecretData(
 		return nil, nil
 	}
 
-	reader := pullsecret.SourceReader{Reader: r.SourceSecrets, Namespaces: r.PullSecretNamespaces}
+	reader := pullsecret.SourceReader{
+		Reader:     r.SourceSecrets,
+		Namespaces: r.SourceSecrets.Namespaces(),
+	}
 	_, data, err := reader.Read(ctx, pool.Spec.PullSecretRef)
 	if err != nil {
 		return nil, err

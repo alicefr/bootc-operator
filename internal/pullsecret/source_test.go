@@ -160,3 +160,24 @@ func TestSourceReaderRead(t *testing.T) {
 		g.Expect(err.Error()).NotTo(ContainSubstring("hunter2"))
 	})
 }
+
+func TestUnreadable(t *testing.T) {
+	notFound := apierrors.NewNotFound(corev1.Resource("secrets"), "ps")
+	forbidden := apierrors.NewForbidden(corev1.Resource("secrets"), "ps", errors.New("denied"))
+	for _, tt := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"missing", &FetchError{Err: notFound}, true},
+		{"forbidden", &FetchError{Err: forbidden}, true},
+		{"namespace not allowed", &NamespaceNotAllowedError{Namespace: "ns"}, true},
+		{"namespace unavailable", &FetchError{Err: &NamespaceUnavailableError{Namespace: "ns"}}, true},
+		{"server error", &FetchError{Err: apierrors.NewInternalError(errors.New("boom"))}, false},
+		{"timeout", &FetchError{Err: context.DeadlineExceeded}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			NewWithT(t).Expect(Unreadable(tt.err)).To(Equal(tt.want))
+		})
+	}
+}

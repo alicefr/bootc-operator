@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,29 +54,24 @@ func main() {
 	var enableLeaderElection bool
 	var showVersion bool
 	var probeAddr string
-	var tagResolutionInterval time.Duration
-	var allowInsecureRegistry bool
-	var pullSecretNamespacesFlag string
 	flag.StringVar(
 		&probeAddr,
 		"health-probe-bind-address",
 		":8081",
 		"The address the probe endpoint binds to.",
 	)
-	flag.DurationVar(
-		&tagResolutionInterval,
+	// These flags are read through config.SettingsFromFlags.
+	flag.Duration(
 		config.TagResolutionIntervalFlag,
 		time.Duration(bootcv1alpha1.DefaultTagResolutionPeriodSeconds)*time.Second,
 		"How often to re-resolve tag-based image refs.",
 	)
-	flag.BoolVar(
-		&allowInsecureRegistry,
+	flag.Bool(
 		config.AllowInsecureRegistryFlag,
 		false,
 		"Allow falling back to HTTP when resolving tag-based image refs against registries that do not serve TLS.",
 	)
-	flag.StringVar(
-		&pullSecretNamespacesFlag,
+	flag.String(
 		config.PullSecretNamespacesFlag,
 		"",
 		"Comma-separated extra namespaces that pools may reference pull secrets from. "+
@@ -115,15 +111,11 @@ func main() {
 		setupLog.Error(err, "Failed to load operator configuration")
 		os.Exit(1)
 	}
-	// The CLI values are what applies again if the configuration is deleted,
-	// so take them before the configuration is applied to the flags.
+	// The CLI values are what applies when the configuration does not set a
+	// field, including after it is deleted.
 	fallback, err := config.SettingsFromFlags(flag.CommandLine)
 	if err != nil {
 		setupLog.Error(err, "Failed to read CLI settings")
-		os.Exit(1)
-	}
-	if err := config.ApplyToFlags(flag.CommandLine, operatorConfig); err != nil {
-		setupLog.Error(err, "Failed to apply operator configuration")
 		os.Exit(1)
 	}
 	operatorNamespace := detectNamespace()
@@ -131,8 +123,16 @@ func main() {
 		setupLog.Error(nil, "Operator namespace unknown; set POD_NAMESPACE")
 		os.Exit(1)
 	}
-	pullSecretNamespaces, err := controller.ParsePullSecretNamespaces(
-		pullSecretNamespacesFlag,
+	if _, err := controller.AllowedPullSecretNamespaces(
+		fallback.PullSecretNamespaces,
+		operatorNamespace,
+	); err != nil {
+		setupLog.Error(err, "Invalid pull secret namespace configuration")
+		os.Exit(1)
+	}
+	settings := config.Resolve(fallback, operatorConfig)
+	pullSecretNamespaces, err := controller.AllowedPullSecretNamespaces(
+		settings.PullSecretNamespaces,
 		operatorNamespace,
 	)
 	if err != nil {
@@ -175,7 +175,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	sourceSecrets, err := pullsecret.NewSourceCache(mgr, pullSecretNamespaces)
+	sourceSecrets, err := pullsecret.NewSourceCache(
+		mgr,
+		pullSecretNamespaces,
+		ctrl.Log.WithName("pullsecret"),
+	)
 	if err != nil {
 		setupLog.Error(err, "Failed to create pull secret cache")
 		os.Exit(1)
@@ -192,9 +196,8 @@ func main() {
 		Scheme:                mgr.GetScheme(),
 		KubeClient:            kubeClient,
 		EventNamespace:        operatorNamespace,
-		TagResolver:           registry.NewGGCRResolver(allowInsecureRegistry),
-		TagResolutionInterval: tagResolutionInterval,
-		PullSecretNamespaces:  pullSecretNamespaces,
+		TagResolver:           registry.NewGGCRResolver(settings.AllowInsecureRegistry),
+		TagResolutionInterval: settings.TagResolutionInterval,
 		SourceSecrets:         sourceSecrets,
 	}
 	if err := poolReconciler.SetupWithManager(mgr); err != nil {
@@ -210,6 +213,19 @@ func main() {
 	)
 	configWatcher.OnChange(func(prev, next config.State) {
 		poolReconciler.ApplySettings(prev.Settings, next.Settings)
+		if slices.Equal(prev.Settings.PullSecretNamespaces, next.Settings.PullSecretNamespaces) {
+			return
+		}
+		namespaces, err := controller.AllowedPullSecretNamespaces(
+			next.Settings.PullSecretNamespaces,
+			operatorNamespace,
+		)
+		if err != nil {
+			setupLog.Error(err, "Keeping the current pull secret namespaces")
+			return
+		}
+		setupLog.Info("Pull secret namespaces", "namespaces", namespaces)
+		sourceSecrets.SetNamespaces(namespaces)
 	})
 	if err := mgr.Add(configWatcher); err != nil {
 		setupLog.Error(err, "Failed to add operator configuration watcher")
@@ -217,10 +233,9 @@ func main() {
 	}
 
 	if err := (&pullsecret.PullSecretAggregator{
-		Client:               mgr.GetClient(),
-		Secrets:              sourceSecrets,
-		Namespace:            operatorNamespace,
-		PullSecretNamespaces: pullSecretNamespaces,
+		Client:    mgr.GetClient(),
+		Secrets:   sourceSecrets,
+		Namespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "pullsecretaggregator")
 		os.Exit(1)

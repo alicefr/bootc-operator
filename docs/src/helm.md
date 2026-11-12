@@ -80,11 +80,11 @@ transfer CRDs from an existing combined release.
      --version "$CHART_VERSION" --namespace bootc-operator --set crds.install=false
    ```
 
-The controller and daemon read the configuration on their first startup.
-Later configuration edits still require restarting the affected workloads. If
-the CR allows extra pull-secret namespaces, provision their
+The controller and daemon read the configuration on their first startup and
+apply later edits without a restart. If the CR allows extra pull-secret
+namespaces, provision their
 [namespaced permissions](operations/configuration.md#pull-secret-namespaces)
-before installing the operator.
+before installing the operator, so they are available from the start.
 
 ## Custom image
 

@@ -12,7 +12,7 @@ const (
 	DefaultStatusPollPeriodSeconds int32 = 300
 )
 
-// OperatorControllerConfig configures the operator controller at startup.
+// OperatorControllerConfig configures the operator controller.
 type OperatorControllerConfig struct {
 	// allowInsecureRegistry allows falling back to HTTP when accessing image
 	// registries. Enable this only for trusted registries that do not support TLS.
@@ -40,7 +40,7 @@ type OperatorControllerConfig struct {
 	PullSecretNamespaces []string `json:"pullSecretNamespaces,omitzero"`
 }
 
-// OperatorDaemonConfig configures each node daemon at startup.
+// OperatorDaemonConfig configures each node daemon.
 type OperatorDaemonConfig struct {
 	// statusPollPeriodSeconds is the interval in seconds between bootc status
 	// polls when filesystem notifications are unavailable. When omitted, use the
@@ -50,8 +50,8 @@ type OperatorDaemonConfig struct {
 	StatusPollPeriodSeconds *int32 `json:"statusPollPeriodSeconds,omitempty"`
 }
 
-// BootcOperatorConfigSpec defines operator settings consumed at process startup.
-// Restart the affected controller or daemon pods after changing these settings.
+// BootcOperatorConfigSpec defines operator settings. The controller and the
+// daemons apply changes while they run, without a restart.
 type BootcOperatorConfigSpec struct {
 	// controller configures the controller. Omitted settings use CLI values or built-in defaults.
 	// +optional
@@ -69,8 +69,11 @@ type BootcOperatorConfigSpec struct {
 
 // BootcOperatorConfig configures the controller and node daemons in a cluster.
 // The optional resource is administrator-owned and may have any valid name.
-// The operator rejects multiple configurations at startup. Changes take effect
-// when the affected pods restart; supplied fields take precedence over CLI flags.
+// The operator rejects multiple configurations at startup. While it runs with
+// more than one, it keeps the settings it had until exactly one remains.
+// Changes apply to the running controller and daemons; supplied fields take
+// precedence over CLI flags, and omitted ones, or all of them once the
+// configuration is deleted, revert to them.
 type BootcOperatorConfig struct {
 	metav1.TypeMeta `json:",inline"`
 
@@ -78,7 +81,7 @@ type BootcOperatorConfig struct {
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// spec defines the configuration consumed when operator processes start.
+	// spec defines the configuration the operator applies.
 	// +required
 	Spec BootcOperatorConfigSpec `json:"spec"`
 }

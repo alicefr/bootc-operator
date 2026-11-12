@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"time"
 
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,10 +36,9 @@ func init() {
 }
 
 func main() {
-	var pollInterval time.Duration
 	var showVersion bool
-	flag.DurationVar(
-		&pollInterval,
+	// Read through config.SettingsFromFlags.
+	flag.Duration(
 		config.BootcPollIntervalFlag,
 		daemon.DefaultPollInterval,
 		"Interval for polling bootc status as a fallback to fsnotify",
@@ -86,17 +84,14 @@ func main() {
 		setupLog.Error(err, "Failed to load operator configuration")
 		os.Exit(1)
 	}
-	// The CLI values are what applies again if the configuration is deleted,
-	// so take them before the configuration is applied to the flags.
+	// The CLI values are what applies when the configuration does not set a
+	// field, including after it is deleted.
 	fallback, err := config.SettingsFromFlags(flag.CommandLine)
 	if err != nil {
 		setupLog.Error(err, "Failed to read CLI settings")
 		os.Exit(1)
 	}
-	if err := config.ApplyToFlags(flag.CommandLine, operatorConfig); err != nil {
-		setupLog.Error(err, "Failed to apply operator configuration")
-		os.Exit(1)
-	}
+	pollInterval := config.Resolve(fallback, operatorConfig).BootcPollInterval
 	config.LogSource(setupLog, operatorConfig, explicit, config.BootcPollIntervalFlag)
 
 	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{

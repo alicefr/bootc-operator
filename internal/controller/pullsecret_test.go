@@ -11,6 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -524,11 +525,13 @@ func TestFetchPullSecretDataNormalizesFormat(t *testing.T) {
 			secret := tt.secret.DeepCopy()
 			secret.Name, secret.Namespace = "ps", "ns"
 			r := &BootcNodePoolReconciler{
-				SourceSecrets: getOnlySecrets{fake.NewClientBuilder().
-					WithScheme(scheme.Scheme).
-					WithObjects(secret).
-					Build()},
-				PullSecretNamespaces: []string{"ns"},
+				SourceSecrets: getOnlySecrets{
+					Reader: fake.NewClientBuilder().
+						WithScheme(scheme.Scheme).
+						WithObjects(secret).
+						Build(),
+					namespaces: []string{"ns"},
+				},
 			}
 			pool := testutil.NewPool(
 				"pool",
@@ -547,11 +550,96 @@ func TestFetchPullSecretDataNormalizesFormat(t *testing.T) {
 	}
 }
 
-// getOnlySecrets reads Secrets from a client and has no events to report.
-type getOnlySecrets struct{ client.Reader }
+// getOnlySecrets reads Secrets from a client in the given namespaces and has
+// no events to report.
+type getOnlySecrets struct {
+	client.Reader
+	namespaces []string
+}
+
+func (g getOnlySecrets) Namespaces() []string { return g.namespaces }
 
 func (getOnlySecrets) Source(
 	handler.TypedEventHandler[client.Object, reconcile.Request],
 ) source.SyncingSource {
 	return nil
+}
+
+func (getOnlySecrets) NamespaceSource(
+	handler.TypedEventHandler[client.Object, reconcile.Request],
+) source.SyncingSource {
+	return nil
+}
+
+// unavailableSecrets reads nothing: its namespaces are allowed but cannot be
+// listed.
+type unavailableSecrets struct {
+	getOnlySecrets
+	reason string
+}
+
+func (u unavailableSecrets) Get(
+	_ context.Context,
+	key client.ObjectKey,
+	_ client.Object,
+	_ ...client.GetOption,
+) error {
+	return &pullsecret.NamespaceUnavailableError{Namespace: key.Namespace, Reason: u.reason}
+}
+
+func TestFetchPullSecretDataNamespaceStates(t *testing.T) {
+	pool := testutil.NewPool(
+		"pool",
+		testutil.ImageDigestRefA,
+		testutil.WithPullSecret("ps", "team-a"),
+	)
+	for _, tt := range []struct {
+		name    string
+		secrets pullsecret.SourceSecrets
+		wantErr string
+	}{
+		{
+			name:    "namespace not allowed",
+			secrets: getOnlySecrets{namespaces: []string{"other"}},
+			wantErr: `pull secret namespace "team-a" is not allowed (allowed: other)`,
+		},
+		{
+			name: "allowed but unavailable",
+			secrets: unavailableSecrets{
+				getOnlySecrets: getOnlySecrets{namespaces: []string{"team-a"}},
+				reason:         "the controller cannot list Secrets",
+			},
+			wantErr: `pull secret namespace "team-a" is not available: the controller cannot list Secrets`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			r := &BootcNodePoolReconciler{SourceSecrets: tt.secrets}
+			_, err := r.fetchPullSecretData(context.Background(), pool)
+			g.Expect(err).To(MatchError(ContainSubstring(tt.wantErr)))
+		})
+	}
+}
+
+func TestMapNamespaceToPoolRequests(t *testing.T) {
+	g := NewWithT(t)
+	r := &BootcNodePoolReconciler{Client: fake.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		WithObjects(
+			testutil.NewPool("in-a-1", testutil.ImageDigestRefA, testutil.WithPullSecret("ps", "team-a")),
+			testutil.NewPool("in-a-2", testutil.ImageDigestRefA, testutil.WithPullSecret("other", "team-a")),
+			testutil.NewPool("in-b", testutil.ImageDigestRefA, testutil.WithPullSecret("ps", "team-b")),
+			testutil.NewPool("none", testutil.ImageDigestRefA),
+		).
+		Build()}
+
+	requests := r.mapNamespaceToPoolRequests(
+		context.Background(),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}},
+	)
+
+	g.Expect(requests).To(ConsistOf(
+		reconcile.Request{NamespacedName: types.NamespacedName{Name: "in-a-1"}},
+		reconcile.Request{NamespacedName: types.NamespacedName{Name: "in-a-2"}},
+	))
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -87,7 +88,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	sourceSecrets, err := pullsecret.NewSourceCache(mgr, pullSecretNamespaces)
+	sourceSecrets, err := pullsecret.NewSourceCache(mgr, pullSecretNamespaces, logr.Discard())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create pull secret cache: %v\n", err)
 		os.Exit(1)
@@ -106,12 +107,11 @@ func TestMain(m *testing.M) {
 	}
 
 	testReconciler = &BootcNodePoolReconciler{
-		Client:               mgr.GetClient(),
-		Scheme:               mgr.GetScheme(),
-		KubeClient:           kubeClient,
-		EventNamespace:       testutil.OperatorNamespaceName,
-		PullSecretNamespaces: pullSecretNamespaces,
-		SourceSecrets:        sourceSecrets,
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		KubeClient:     kubeClient,
+		EventNamespace: testutil.OperatorNamespaceName,
+		SourceSecrets:  sourceSecrets,
 	}
 	if err := testReconciler.SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to setup reconciler: %v\n", err)

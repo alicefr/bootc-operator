@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -31,8 +32,11 @@ const (
 )
 
 var (
-	k8sClient  client.Client
-	restConfig *rest.Config
+	testEnv *envtest.Environment
+	// suiteSourceCache is the SourceCache of the aggregator under test.
+	suiteSourceCache *SourceCache
+	k8sClient        client.Client
+	restConfig       *rest.Config
 )
 
 func TestMain(m *testing.M) {
@@ -43,7 +47,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	testEnv := &envtest.Environment{
+	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,
 	}
@@ -94,17 +98,16 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	sourceSecrets, err := NewSourceCache(mgr, pullSecretNamespaces)
+	suiteSourceCache, err = NewSourceCache(mgr, pullSecretNamespaces, logr.Discard())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create pull secret cache: %v\n", err)
 		os.Exit(1)
 	}
 
 	if err := (&PullSecretAggregator{
-		Client:               mgr.GetClient(),
-		Secrets:              sourceSecrets,
-		Namespace:            testutil.OperatorNamespaceName,
-		PullSecretNamespaces: pullSecretNamespaces,
+		Client:    mgr.GetClient(),
+		Secrets:   suiteSourceCache,
+		Namespace: testutil.OperatorNamespaceName,
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to setup pull secret aggregator: %v\n", err)
 		os.Exit(1)

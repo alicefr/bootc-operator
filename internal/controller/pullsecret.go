@@ -33,6 +33,13 @@ func ParsePullSecretNamespaces(value, operatorNamespace string) ([]string, error
 	return namespaces, nil
 }
 
+// AllowedPullSecretNamespaces returns the namespaces pools may reference pull
+// secrets from: operatorNamespace and the extra ones given, validated as by
+// ParsePullSecretNamespaces.
+func AllowedPullSecretNamespaces(extra []string, operatorNamespace string) ([]string, error) {
+	return ParsePullSecretNamespaces(strings.Join(extra, ","), operatorNamespace)
+}
+
 // SecretCacheByObject returns manager cache settings that restrict the
 // Secret informer to the given namespaces, so the manager never caches (or
 // needs RBAC for) Secrets elsewhere in the cluster.

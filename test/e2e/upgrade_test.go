@@ -446,15 +446,19 @@ func effectivePullSecretNamespaces(
 	args []string, cfg *bootcv1alpha1.BootcOperatorConfig, operatorNamespace string,
 ) ([]string, error) {
 	fs := flag.NewFlagSet("controller namespaces", flag.ContinueOnError)
-	value := fs.String(config.PullSecretNamespacesFlag, "", "")
+	fs.String(config.PullSecretNamespacesFlag, "", "")
 	_, namespaceArgs := splitNamespaceArgs(args)
 	if err := fs.Parse(namespaceArgs); err != nil {
 		return nil, err
 	}
-	if err := config.ApplyToFlags(fs, cfg); err != nil {
+	fallback, err := config.SettingsFromFlags(fs)
+	if err != nil {
 		return nil, err
 	}
-	return controller.ParsePullSecretNamespaces(*value, operatorNamespace)
+	return controller.AllowedPullSecretNamespaces(
+		config.Resolve(fallback, cfg).PullSecretNamespaces,
+		operatorNamespace,
+	)
 }
 
 // splitNamespaceArgs handles both flag forms and retains their order so the last
