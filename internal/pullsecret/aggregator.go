@@ -5,9 +5,9 @@ package pullsecret
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
-	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -162,25 +162,19 @@ func (r *PullSecretAggregator) desiredData(ctx context.Context) (map[string][]by
 		return nil, fmt.Errorf("listing BootcNodePools: %w", err)
 	}
 
+	reader := SourceReader{Reader: r.Client, Namespaces: r.PullSecretNamespaces}
 	desired := map[string][]byte{}
 	for i := range pools.Items {
 		ref := pools.Items[i].Spec.PullSecretRef
-		if ref == nil || !slices.Contains(r.PullSecretNamespaces, ref.Namespace) {
+		if ref == nil {
 			continue
 		}
-		key, err := Key(ref.Namespace, ref.Name)
-		if err != nil {
-			continue
+		key, data, err := reader.Read(ctx, ref)
+		var fetchErr *FetchError
+		if errors.As(err, &fetchErr) && !apierrors.IsNotFound(err) {
+			return nil, err
 		}
-		var secret corev1.Secret
-		err = r.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, &secret)
-		if apierrors.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("fetching pull secret %s/%s: %w", ref.Namespace, ref.Name, err)
-		}
-		if data, err := AuthData(&secret); err == nil {
+		if err == nil {
 			desired[key] = data
 		}
 	}

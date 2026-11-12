@@ -819,33 +819,10 @@ func (r *BootcNodePoolReconciler) fetchPullSecretData(
 		return nil, nil
 	}
 
-	if !slices.Contains(r.PullSecretNamespaces, pool.Spec.PullSecretRef.Namespace) {
-		return nil, fmt.Errorf(
-			"pull secret namespace %q is not allowed (allowed: %s)",
-			pool.Spec.PullSecretRef.Namespace,
-			strings.Join(r.PullSecretNamespaces, ", "),
-		)
-	}
-
-	if _, err := pullsecret.Key(
-		pool.Spec.PullSecretRef.Namespace,
-		pool.Spec.PullSecretRef.Name,
-	); err != nil {
-		return nil, err
-	}
-
-	key := types.NamespacedName{
-		Name:      pool.Spec.PullSecretRef.Name,
-		Namespace: pool.Spec.PullSecretRef.Namespace,
-	}
-	var secret corev1.Secret
-	if err := r.Get(ctx, key, &secret); err != nil {
-		return nil, fmt.Errorf("fetching pull secret %s/%s: %w", key.Namespace, key.Name, err)
-	}
-
-	data, err := pullsecret.AuthData(&secret)
+	reader := pullsecret.SourceReader{Reader: r.Client, Namespaces: r.PullSecretNamespaces}
+	_, data, err := reader.Read(ctx, pool.Spec.PullSecretRef)
 	if err != nil {
-		return nil, fmt.Errorf("pull secret %s/%s: %w", key.Namespace, key.Name, err)
+		return nil, err
 	}
 
 	return data, nil
