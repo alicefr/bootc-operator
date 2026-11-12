@@ -32,7 +32,11 @@ import (
 // secret's credentials in .dockerconfigjson format (see AuthData). It is the Secret's only writer and recomputes
 // it from scratch on every reconcile.
 type PullSecretAggregator struct {
+	// Client reads the pools and reads and writes the aggregated Secret.
 	client.Client
+
+	// Secrets reads the source secrets and reports their changes.
+	Secrets SourceSecrets
 
 	// Namespace is the operator namespace, which holds the aggregated
 	// Secret.
@@ -61,7 +65,11 @@ func (r *PullSecretAggregator) SetupWithManager(mgr ctrl.Manager) error {
 		WatchesRawSource(source.Channel(startup, handler.EnqueueRequestsFromMapFunc(enqueueAll))).
 		Watches(&bootcv1alpha1.BootcNodePool{}, handler.EnqueueRequestsFromMapFunc(enqueueAll),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.mapSecret)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(enqueueAll),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				return client.ObjectKeyFromObject(obj) == r.secretKey()
+			}))).
+		WatchesRawSource(r.Secrets.Source(handler.EnqueueRequestsFromMapFunc(r.mapSecret))).
 		Complete(r)
 }
 
@@ -162,7 +170,7 @@ func (r *PullSecretAggregator) desiredData(ctx context.Context) (map[string][]by
 		return nil, fmt.Errorf("listing BootcNodePools: %w", err)
 	}
 
-	reader := SourceReader{Reader: r.Client, Namespaces: r.PullSecretNamespaces}
+	reader := SourceReader{Reader: r.Secrets, Namespaces: r.PullSecretNamespaces}
 	desired := map[string][]byte{}
 	for i := range pools.Items {
 		ref := pools.Items[i].Spec.PullSecretRef

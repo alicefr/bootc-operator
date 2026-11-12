@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,7 +30,10 @@ const (
 	pollTimeout  = 10 * time.Second
 )
 
-var k8sClient client.Client
+var (
+	k8sClient  client.Client
+	restConfig *rest.Config
+)
 
 func TestMain(m *testing.M) {
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
@@ -50,19 +54,17 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	restConfig = cfg
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create client: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Mirror the manager the operator runs: the Secret informer is
-	// restricted to the allowed pull secret namespaces.
+	// Mirror the manager the operator runs: its Secret informer is
+	// restricted to the operator namespace, the source secrets are read
+	// through a SourceCache.
 	pullSecretNamespaces := []string{testutil.OperatorNamespaceName}
-	secretNamespaces := make(map[string]cache.Config, len(pullSecretNamespaces))
-	for _, ns := range pullSecretNamespaces {
-		secretNamespaces[ns] = cache.Config{}
-	}
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme.Scheme,
 		Metrics: metricsserver.Options{
@@ -70,7 +72,9 @@ func TestMain(m *testing.M) {
 		},
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}: {Namespaces: secretNamespaces},
+				&corev1.Secret{}: {Namespaces: map[string]cache.Config{
+					testutil.OperatorNamespaceName: {},
+				}},
 			},
 		},
 	})
@@ -90,8 +94,15 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	sourceSecrets, err := NewSourceCache(mgr, pullSecretNamespaces)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create pull secret cache: %v\n", err)
+		os.Exit(1)
+	}
+
 	if err := (&PullSecretAggregator{
 		Client:               mgr.GetClient(),
+		Secrets:              sourceSecrets,
 		Namespace:            testutil.OperatorNamespaceName,
 		PullSecretNamespaces: pullSecretNamespaces,
 	}).SetupWithManager(mgr); err != nil {

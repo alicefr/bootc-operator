@@ -10,7 +10,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
 )
@@ -21,7 +20,7 @@ import (
 // pool reconciler and the PullSecretAggregator cannot disagree about it.
 type SourceReader struct {
 	// Reader fetches the Secrets.
-	Reader client.Reader
+	Reader SecretGetter
 
 	// Namespaces is the allowlist of namespaces pools may reference pull
 	// secrets from.

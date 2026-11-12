@@ -71,7 +71,7 @@ func TestMain(m *testing.M) {
 			BindAddress: "0", // disable metrics server in tests
 		},
 		Cache: cache.Options{
-			ByObject: SecretCacheByObject(pullSecretNamespaces),
+			ByObject: SecretCacheByObject([]string{testutil.OperatorNamespaceName}),
 		},
 	})
 	if err != nil {
@@ -84,6 +84,12 @@ func TestMain(m *testing.M) {
 		mgr.GetFieldIndexer(),
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to index pools by pull secret: %v\n", err)
+		os.Exit(1)
+	}
+
+	sourceSecrets, err := pullsecret.NewSourceCache(mgr, pullSecretNamespaces)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create pull secret cache: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -105,6 +111,7 @@ func TestMain(m *testing.M) {
 		KubeClient:           kubeClient,
 		EventNamespace:       testutil.OperatorNamespaceName,
 		PullSecretNamespaces: pullSecretNamespaces,
+		SourceSecrets:        sourceSecrets,
 	}
 	if err := testReconciler.SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to setup reconciler: %v\n", err)

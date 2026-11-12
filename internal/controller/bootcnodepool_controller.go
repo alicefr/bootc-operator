@@ -71,9 +71,13 @@ type BootcNodePoolReconciler struct {
 	TagResolutionInterval time.Duration
 
 	// PullSecretNamespaces is the allowlist of namespaces pools may
-	// reference pull secrets from. The manager's Secret cache must be
-	// restricted to the same namespaces.
+	// reference pull secrets from. SourceSecrets must cover the same
+	// namespaces.
 	PullSecretNamespaces []string
+
+	// SourceSecrets reads the pull secrets pools reference and reports their
+	// changes.
+	SourceSecrets pullsecret.SourceSecrets
 
 	// drainCh receives events from drain goroutines to re-enqueue the
 	// owning pool after a drain completes.
@@ -113,7 +117,9 @@ func (r *BootcNodePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&bootcv1alpha1.BootcNodePool{}).
 		Owns(&bootcv1alpha1.BootcNode{}).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.mapNodeToPoolRequests), builder.WithPredicates(nodePredicates())).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.mapSecretToPoolRequests)).
+		WatchesRawSource(r.SourceSecrets.Source(
+			handler.EnqueueRequestsFromMapFunc(r.mapSecretToPoolRequests),
+		)).
 		WatchesRawSource(source.Channel(r.drainCh, &handler.EnqueueRequestForObject{}))
 
 	// Karpenter is optional. Only register the NodeClaim watch when its CRD is
@@ -819,7 +825,7 @@ func (r *BootcNodePoolReconciler) fetchPullSecretData(
 		return nil, nil
 	}
 
-	reader := pullsecret.SourceReader{Reader: r.Client, Namespaces: r.PullSecretNamespaces}
+	reader := pullsecret.SourceReader{Reader: r.SourceSecrets, Namespaces: r.PullSecretNamespaces}
 	_, data, err := reader.Read(ctx, pool.Spec.PullSecretRef)
 	if err != nil {
 		return nil, err

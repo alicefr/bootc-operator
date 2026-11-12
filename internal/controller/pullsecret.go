@@ -34,8 +34,8 @@ func ParsePullSecretNamespaces(value, operatorNamespace string) ([]string, error
 }
 
 // SecretCacheByObject returns manager cache settings that restrict the
-// Secret informer to the given namespaces, so the controller never caches
-// (or needs RBAC for) Secrets elsewhere in the cluster.
+// Secret informer to the given namespaces, so the manager never caches (or
+// needs RBAC for) Secrets elsewhere in the cluster.
 func SecretCacheByObject(namespaces []string) map[client.Object]cache.ByObject {
 	config := make(map[string]cache.Config, len(namespaces))
 	for _, ns := range namespaces {

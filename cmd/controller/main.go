@@ -149,7 +149,10 @@ func main() {
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "bootc-operator.bootc.dev",
 		Cache: cache.Options{
-			ByObject: controller.SecretCacheByObject(pullSecretNamespaces),
+			// Only the aggregated Secret is read through the manager. The
+			// source secrets in the allowed namespaces are read through
+			// the SourceCache.
+			ByObject: controller.SecretCacheByObject([]string{operatorNamespace}),
 		},
 	})
 	if err != nil {
@@ -162,6 +165,12 @@ func main() {
 		mgr.GetFieldIndexer(),
 	); err != nil {
 		setupLog.Error(err, "Failed to index pools by pull secret")
+		os.Exit(1)
+	}
+
+	sourceSecrets, err := pullsecret.NewSourceCache(mgr, pullSecretNamespaces)
+	if err != nil {
+		setupLog.Error(err, "Failed to create pull secret cache")
 		os.Exit(1)
 	}
 
@@ -179,6 +188,7 @@ func main() {
 		TagResolver:           &registry.GGCRResolver{AllowInsecure: allowInsecureRegistry},
 		TagResolutionInterval: tagResolutionInterval,
 		PullSecretNamespaces:  pullSecretNamespaces,
+		SourceSecrets:         sourceSecrets,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "bootcnodepool")
 		os.Exit(1)
@@ -186,6 +196,7 @@ func main() {
 
 	if err := (&pullsecret.PullSecretAggregator{
 		Client:               mgr.GetClient(),
+		Secrets:              sourceSecrets,
 		Namespace:            operatorNamespace,
 		PullSecretNamespaces: pullSecretNamespaces,
 	}).SetupWithManager(mgr); err != nil {

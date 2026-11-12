@@ -14,7 +14,9 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
 	"github.com/bootc-dev/bootc-operator/internal/pullsecret"
@@ -522,10 +524,10 @@ func TestFetchPullSecretDataNormalizesFormat(t *testing.T) {
 			secret := tt.secret.DeepCopy()
 			secret.Name, secret.Namespace = "ps", "ns"
 			r := &BootcNodePoolReconciler{
-				Client: fake.NewClientBuilder().
+				SourceSecrets: getOnlySecrets{fake.NewClientBuilder().
 					WithScheme(scheme.Scheme).
 					WithObjects(secret).
-					Build(),
+					Build()},
 				PullSecretNamespaces: []string{"ns"},
 			}
 			pool := testutil.NewPool(
@@ -543,4 +545,13 @@ func TestFetchPullSecretDataNormalizesFormat(t *testing.T) {
 			g.Expect(string(got)).To(MatchJSON(tt.want))
 		})
 	}
+}
+
+// getOnlySecrets reads Secrets from a client and has no events to report.
+type getOnlySecrets struct{ client.Reader }
+
+func (getOnlySecrets) Source(
+	handler.TypedEventHandler[client.Object, reconcile.Request],
+) source.SyncingSource {
+	return nil
 }
