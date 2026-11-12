@@ -12,6 +12,7 @@ import (
 	"time"
 
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/types"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -20,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	bootcv1alpha1 "github.com/bootc-dev/bootc-operator/api/v1alpha1"
+	"github.com/bootc-dev/bootc-operator/internal/pullsecret"
 	"github.com/bootc-dev/bootc-operator/test/e2e/e2eutil"
 	testutil "github.com/bootc-dev/bootc-operator/test/util"
 )
@@ -112,9 +114,13 @@ func TestPullSecretNamespaces(t *testing.T) {
 	t.Logf("Node %q updated with a pull secret from namespace %q", nodeName, allowedNS)
 }
 
-// TestOperatorConfigPullSecretNamespaces changes shared startup configuration,
-// so it must stay serial. No node is provisioned: reconciling a digest-based pool
-// proves that the controller can read a Secret through its namespace-scoped cache.
+// TestOperatorConfigPullSecretNamespaces edits the BootcOperatorConfig while
+// the controller runs and checks that the pull secret namespaces follow without
+// a restart: a namespace is added after its RBAC exists, and another before
+// it, a rotation reaches the aggregated Secret, and removing a namespace or
+// deleting the configuration takes its key out again. It changes shared
+// configuration, so it must stay serial. No node is provisioned: the aggregated
+// Secret and the pools' conditions show what the controller reads.
 func TestOperatorConfigPullSecretNamespaces(t *testing.T) {
 	e2eutil.Providers(t, "bink")
 	g := NewWithT(t)
@@ -127,43 +133,18 @@ func TestOperatorConfigPullSecretNamespaces(t *testing.T) {
 	originalConfig, err := readOperatorConfig(ctx, env.Client)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	namespaces := []string{env.TestID() + "-allowed", env.TestID() + "-denied"}
-	for _, name := range namespaces {
+	id := env.TestID()
+	allowedNS, lateNS, deniedNS := id+"-allowed", id+"-late", id+"-denied"
+	for _, name := range []string{allowedNS, lateNS, deniedNS} {
 		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
 		g.Expect(env.Client.Create(ctx, ns)).To(Succeed())
 		t.Cleanup(
 			func() { g.Expect(client.IgnoreNotFound(env.Client.Delete(ctx, ns))).To(Succeed()) },
 		)
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "pull-secret", Namespace: name},
-			Type:       corev1.SecretTypeDockerConfigJson,
-			Data:       map[string][]byte{corev1.DockerConfigJsonKey: []byte(`{"auths":{}}`)},
-		}
-		g.Expect(env.Client.Create(ctx, secret)).To(Succeed())
+		g.Expect(env.Client.Create(ctx, pullSecretIn(name, "v1"))).To(Succeed())
 	}
-	role := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: "pull-secrets", Namespace: namespaces[0]},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{""},
-				Resources: []string{"secrets"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-		},
-	}
-	g.Expect(env.Client.Create(ctx, role)).To(Succeed())
-	binding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: role.Name, Namespace: role.Namespace},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: role.Name},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      originalDeploy.Spec.Template.Spec.ServiceAccountName,
-				Namespace: originalDeploy.Namespace,
-			},
-		},
-	}
-	g.Expect(env.Client.Create(ctx, binding)).To(Succeed())
+	serviceAccount := originalDeploy.Spec.Template.Spec.ServiceAccountName
+	grantSecretAccess(t, g, ctx, env.Client, allowedNS, serviceAccount, originalDeploy.Namespace)
 
 	var originalArgs []string
 	for _, cont := range originalDeploy.Spec.Template.Spec.Containers {
@@ -177,47 +158,252 @@ func TestOperatorConfigPullSecretNamespaces(t *testing.T) {
 		restartOperator(t)
 		waitForOperatorReady(t, g, ctx, env.Client)
 	})
+
+	// Start from a known configuration, with the CLI out of the way. This is
+	// the only restart: the rest is applied by the running controller.
+	name := id
+	if originalConfig != nil {
+		name = originalConfig.Name
+	}
 	cfg := originalConfig.DeepCopy()
 	if cfg == nil {
-		cfg = &bootcv1alpha1.BootcOperatorConfig{ObjectMeta: metav1.ObjectMeta{Name: env.TestID()}}
+		cfg = &bootcv1alpha1.BootcOperatorConfig{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	}
 	if cfg.Spec.Controller == nil {
 		cfg.Spec.Controller = &bootcv1alpha1.OperatorControllerConfig{}
 	}
-	cfg.Spec.Controller.PullSecretNamespaces = []string{namespaces[0]}
+	cfg.Spec.Controller.PullSecretNamespaces = []string{allowedNS}
 	g.Expect(restoreOperatorConfig(ctx, env.Client, cfg)).To(Succeed())
 	args, _ := splitNamespaceArgs(originalArgs)
 	setControllerArgs(t, g, ctx, env.Client, args)
 	restartOperator(t)
 	waitForOperatorReady(t, g, ctx, env.Client)
+	controllerBefore := controllerPods(t, g, ctx, env.Client)
 
-	pool := env.NewPool("config-secret", env.NodeImageDigestedPullSpec(),
-		testutil.WithPullSecret("pull-secret", namespaces[1]))
-	g.Expect(env.Client.Create(ctx, pool)).To(Succeed())
-	t.Cleanup(func() {
-		g.Expect(client.IgnoreNotFound(env.Client.Delete(ctx, pool))).To(Succeed())
-		g.Eventually(func() error { return env.Client.Get(ctx, client.ObjectKeyFromObject(pool), pool) }).
-			Should(MatchError(apierrors.IsNotFound, "IsNotFound"))
-	})
-	conditions := func() ([]metav1.Condition, error) {
-		var got bootcv1alpha1.BootcNodePool
-		err := env.Client.Get(ctx, client.ObjectKeyFromObject(pool), &got)
-		return got.Status.Conditions, err
+	poolFor := func(label, namespace string) *bootcv1alpha1.BootcNodePool {
+		pool := env.NewPool(label, env.NodeImageDigestedPullSpec(),
+			testutil.WithPullSecret("pull-secret", namespace))
+		g.Expect(env.Client.Create(ctx, pool)).To(Succeed())
+		t.Cleanup(func() {
+			g.Expect(client.IgnoreNotFound(env.Client.Delete(ctx, pool))).To(Succeed())
+			g.Eventually(func() error {
+				return env.Client.Get(ctx, client.ObjectKeyFromObject(pool), pool)
+			}).Should(MatchError(apierrors.IsNotFound, "IsNotFound"))
+		})
+		return pool
 	}
-	g.Eventually(conditions).Should(ContainElement(And(
-		HaveField("Type", bootcv1alpha1.PoolDegraded),
-		HaveField("Status", metav1.ConditionTrue),
-		HaveField("Reason", bootcv1alpha1.PoolSecretError),
-		HaveField("Message", ContainSubstring(namespaces[1])),
-	)))
-	modified := pool.DeepCopy()
-	modified.Spec.PullSecretRef.Namespace = namespaces[0]
-	g.Expect(env.Client.Patch(ctx, modified, client.MergeFrom(pool))).To(Succeed())
-	g.Eventually(conditions).Should(ContainElement(And(
+	secretError := func(pool *bootcv1alpha1.BootcNodePool) func() ([]metav1.Condition, error) {
+		return func() ([]metav1.Condition, error) {
+			var got bootcv1alpha1.BootcNodePool
+			err := env.Client.Get(ctx, client.ObjectKeyFromObject(pool), &got)
+			return got.Status.Conditions, err
+		}
+	}
+	degradedBySecret := func(namespace string) types.GomegaMatcher {
+		return ContainElement(And(
+			HaveField("Type", bootcv1alpha1.PoolDegraded),
+			HaveField("Status", metav1.ConditionTrue),
+			HaveField("Reason", bootcv1alpha1.PoolSecretError),
+			HaveField("Message", ContainSubstring(namespace)),
+		))
+	}
+	notDegradedBySecret := ContainElement(And(
 		HaveField("Type", bootcv1alpha1.PoolDegraded),
 		HaveField("Status", metav1.ConditionFalse),
 		HaveField("Reason", bootcv1alpha1.PoolHealthy),
-	)))
+	))
+	aggregated := func() (map[string][]byte, error) {
+		var secret corev1.Secret
+		err := env.Client.Get(ctx, client.ObjectKey{
+			Namespace: testutil.OperatorNamespaceName,
+			Name:      pullsecret.SecretName,
+		}, &secret)
+		return secret.Data, err
+	}
+	keyOf := func(namespace string) string { return namespace + "_pull-secret" }
+	status := func() (bootcv1alpha1.BootcOperatorConfigStatus, error) {
+		var got bootcv1alpha1.BootcOperatorConfig
+		err := env.Client.Get(ctx, client.ObjectKey{Name: name}, &got)
+		return got.Status, err
+	}
+	const slow = 2 * time.Minute
+
+	// A namespace that is not configured is refused, whatever its Secrets.
+	deniedPool := poolFor("cfg-live-denied", deniedNS)
+	g.Eventually(secretError(deniedPool)).Should(degradedBySecret(deniedNS))
+
+	// A configured one with access is read, and its rotation propagates.
+	allowedPool := poolFor("cfg-live-allowed", allowedNS)
+	g.Eventually(secretError(allowedPool)).Should(notDegradedBySecret)
+	g.Eventually(aggregated).Should(HaveKeyWithValue(keyOf(allowedNS), authsJSON("v1")))
+	g.Eventually(status).Should(And(
+		HaveField("ListablePullSecretNamespaces", ContainElement(allowedNS)),
+		HaveField("Conditions", ContainElement(And(
+			HaveField("Type", bootcv1alpha1.ConfigControllerReady),
+			HaveField("Status", metav1.ConditionTrue),
+		))),
+	))
+	rotate(t, g, ctx, env.Client, allowedNS, "v2")
+	g.Eventually(aggregated).Should(HaveKeyWithValue(keyOf(allowedNS), authsJSON("v2")))
+
+	// Adding a namespace before its RBAC exists leaves it pending, and the rest
+	// keeps working.
+	setPullSecretNamespaces(t, g, ctx, env.Client, name, allowedNS, lateNS)
+	latePool := poolFor("cfg-live-late", lateNS)
+	g.Eventually(secretError(latePool)).Should(degradedBySecret(lateNS))
+	g.Eventually(status).Should(And(
+		HaveField("ListablePullSecretNamespaces", Not(ContainElement(lateNS))),
+		HaveField("Conditions", ContainElement(And(
+			HaveField("Type", bootcv1alpha1.ConfigControllerReady),
+			HaveField("Status", metav1.ConditionFalse),
+			HaveField("Reason", bootcv1alpha1.ConfigReasonPendingNamespaces),
+			HaveField("Message", ContainSubstring(lateNS)),
+		))),
+	))
+	g.Expect(aggregated()).To(HaveKey(keyOf(allowedNS)))
+	rotate(t, g, ctx, env.Client, allowedNS, "v3")
+	g.Eventually(aggregated).Should(HaveKeyWithValue(keyOf(allowedNS), authsJSON("v3")))
+
+	// Granting the access activates it without touching the configuration.
+	grantSecretAccess(t, g, ctx, env.Client, lateNS, serviceAccount, originalDeploy.Namespace)
+	g.Eventually(secretError(latePool)).WithTimeout(slow).Should(notDegradedBySecret)
+	g.Eventually(aggregated).Should(HaveKeyWithValue(keyOf(lateNS), authsJSON("v1")))
+	g.Eventually(status).Should(And(
+		HaveField("ListablePullSecretNamespaces", ContainElements(allowedNS, lateNS)),
+		HaveField("Conditions", ContainElement(And(
+			HaveField("Type", bootcv1alpha1.ConfigControllerReady),
+			HaveField("Status", metav1.ConditionTrue),
+		))),
+	))
+	rotate(t, g, ctx, env.Client, lateNS, "v2")
+	g.Eventually(aggregated).Should(HaveKeyWithValue(keyOf(lateNS), authsJSON("v2")))
+
+	// Removing a namespace drops it, and only it.
+	setPullSecretNamespaces(t, g, ctx, env.Client, name, allowedNS)
+	g.Eventually(secretError(latePool)).Should(degradedBySecret(lateNS))
+	g.Eventually(aggregated).Should(And(
+		HaveKey(keyOf(allowedNS)),
+		Not(HaveKey(keyOf(lateNS))),
+	))
+	g.Eventually(status).Should(
+		HaveField("ListablePullSecretNamespaces", Not(ContainElement(lateNS))))
+
+	// Deleting the configuration restores the CLI settings, which allow nothing
+	// extra.
+	g.Expect(restoreOperatorConfig(ctx, env.Client, nil)).To(Succeed())
+	g.Eventually(secretError(allowedPool)).Should(degradedBySecret(allowedNS))
+	g.Eventually(aggregated).ShouldNot(HaveKey(keyOf(allowedNS)))
+
+	// None of it restarted the controller.
+	g.Expect(controllerPods(t, g, ctx, env.Client)).To(Equal(controllerBefore))
+}
+
+// pullSecretIn returns a pull secret in the namespace whose credentials
+// differ with version.
+func pullSecretIn(namespace, version string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "pull-secret", Namespace: namespace},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{corev1.DockerConfigJsonKey: authsJSON(version)},
+	}
+}
+
+func authsJSON(version string) []byte {
+	return fmt.Appendf(nil, `{"auths":{"%s.example.com":{}}}`, version)
+}
+
+// rotate changes the credentials of the namespace's pull secret.
+func rotate(
+	t *testing.T,
+	g Gomega,
+	ctx context.Context,
+	c client.Client,
+	namespace, version string,
+) {
+	t.Helper()
+	var secret corev1.Secret
+	g.Expect(c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: "pull-secret"}, &secret)).
+		To(Succeed())
+	secret.Data[corev1.DockerConfigJsonKey] = authsJSON(version)
+	g.Expect(c.Update(ctx, &secret)).To(Succeed())
+}
+
+// grantSecretAccess lets the controller's ServiceAccount get, list and watch
+// Secrets in the namespace, as an administrator does.
+func grantSecretAccess(
+	t *testing.T,
+	g Gomega,
+	ctx context.Context,
+	c client.Client,
+	namespace, serviceAccount, serviceAccountNamespace string,
+) {
+	t.Helper()
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: "pull-secrets", Namespace: namespace},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""},
+			Resources: []string{"secrets"},
+			Verbs:     []string{"get", "list", "watch"},
+		}},
+	}
+	g.Expect(c.Create(ctx, role)).To(Succeed())
+	g.Expect(c.Create(ctx, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: role.Name, Namespace: namespace},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: role.Name},
+		Subjects: []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      serviceAccount,
+			Namespace: serviceAccountNamespace,
+		}},
+	})).To(Succeed())
+}
+
+// setPullSecretNamespaces edits the configuration in place, as an
+// administrator does, retrying when the controller wrote its status meanwhile.
+func setPullSecretNamespaces(
+	t *testing.T,
+	g Gomega,
+	ctx context.Context,
+	c client.Client,
+	name string,
+	namespaces ...string,
+) {
+	t.Helper()
+	g.Eventually(func() error {
+		var cfg bootcv1alpha1.BootcOperatorConfig
+		if err := c.Get(ctx, client.ObjectKey{Name: name}, &cfg); err != nil {
+			return err
+		}
+		if cfg.Spec.Controller == nil {
+			cfg.Spec.Controller = &bootcv1alpha1.OperatorControllerConfig{}
+		}
+		cfg.Spec.Controller.PullSecretNamespaces = namespaces
+		return c.Update(ctx, &cfg)
+	}).Should(Succeed())
+}
+
+// controllerPods identifies the controller's pods and their containers' restarts,
+// so a test can show that none was replaced or restarted.
+func controllerPods(t *testing.T, g Gomega, ctx context.Context, c client.Client) []string {
+	t.Helper()
+	var d appsv1.Deployment
+	g.Expect(c.Get(ctx, operatorDeployKey(), &d)).To(Succeed())
+	var pods corev1.PodList
+	g.Expect(c.List(ctx, &pods, client.InNamespace(d.Namespace),
+		client.MatchingLabels(d.Spec.Selector.MatchLabels))).To(Succeed())
+	var identities []string
+	for _, pod := range pods.Items {
+		restarts := int32(0)
+		for _, status := range pod.Status.ContainerStatuses {
+			restarts += status.RestartCount
+		}
+		identities = append(
+			identities,
+			fmt.Sprintf("%s/%s/restarts=%d", pod.Name, pod.UID, restarts),
+		)
+	}
+	slices.Sort(identities)
+	return identities
 }
 
 func setControllerArgs(
