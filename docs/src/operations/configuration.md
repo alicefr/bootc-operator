@@ -112,6 +112,12 @@ the next staging. Rotate the credentials and delete the namespace's Role and
 RoleBinding if the access has to be revoked, as removing a namespace from the
 list does not.
 
+The controller drops the key of a pull secret from the aggregated Secret when
+it can no longer be used: it is deleted, the controller is forbidden to read
+it, or its namespace is removed or unavailable. When a read fails for another
+reason, such as an API server hiccup, the key keeps the credentials it last
+had, the other keys still update, and the controller retries with backoff.
+
 ## Applying configuration
 
 To use custom settings on the first startup with Helm, follow

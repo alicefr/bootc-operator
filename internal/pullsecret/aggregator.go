@@ -10,6 +10,7 @@ import (
 	"maps"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -102,21 +103,47 @@ func (r *PullSecretAggregator) mapSecret(
 
 // Reconcile creates or updates the aggregated Secret to match the source
 // secrets currently referenced by pools.
+//
+// A key whose source secret cannot be read for good (see Unreadable) is
+// dropped. One that cannot be read because of a failure that may pass keeps
+// what the aggregated Secret last held for it, so a hiccup does not take
+// credentials away from the nodes, and the other keys still update. The
+// failure is returned once the Secret is written, to retry with backoff.
 func (r *PullSecretAggregator) Reconcile(
 	ctx context.Context,
 	_ ctrl.Request,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	desired, err := r.desiredData(ctx)
-	if err != nil {
-		return ctrl.Result{}, err
+	var secret corev1.Secret
+	err := r.Get(ctx, r.secretKey(), &secret)
+	missing := apierrors.IsNotFound(err)
+	if err != nil && !missing {
+		return ctrl.Result{}, fmt.Errorf("fetching aggregated pull secret: %w", err)
 	}
 
-	var secret corev1.Secret
-	err = r.Get(ctx, r.secretKey(), &secret)
-	if apierrors.IsNotFound(err) {
-		secret = corev1.Secret{
+	desired, readErr := r.desiredData(ctx, secret.Data)
+	if desired == nil {
+		return ctrl.Result{}, readErr
+	}
+
+	result, err := r.write(ctx, log, &secret, missing, desired)
+	if err != nil {
+		return result, err
+	}
+	return result, readErr
+}
+
+// write makes the aggregated Secret hold desired.
+func (r *PullSecretAggregator) write(
+	ctx context.Context,
+	log logr.Logger,
+	secret *corev1.Secret,
+	missing bool,
+	desired map[string][]byte,
+) (ctrl.Result, error) {
+	if missing {
+		*secret = corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      SecretName,
 				Namespace: r.Namespace,
@@ -124,21 +151,18 @@ func (r *PullSecretAggregator) Reconcile(
 			Type: corev1.SecretTypeOpaque,
 			Data: desired,
 		}
-		if err := r.Create(ctx, &secret); err != nil {
+		if err := r.Create(ctx, secret); err != nil {
 			return requeueIfStale(ctx, fmt.Errorf("creating aggregated pull secret: %w", err))
 		}
 		log.Info("Created aggregated pull secret", "keys", len(desired))
 		return ctrl.Result{}, nil
-	}
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("fetching aggregated pull secret: %w", err)
 	}
 
 	if maps.EqualFunc(secret.Data, desired, bytes.Equal) {
 		return ctrl.Result{}, nil
 	}
 	secret.Data = desired
-	if err := r.Update(ctx, &secret); err != nil {
+	if err := r.Update(ctx, secret); err != nil {
 		return requeueIfStale(ctx, fmt.Errorf("updating aggregated pull secret: %w", err))
 	}
 	log.Info("Updated aggregated pull secret", "keys", len(desired))
@@ -158,10 +182,17 @@ func requeueIfStale(ctx context.Context, err error) (ctrl.Result, error) {
 	return ctrl.Result{}, err
 }
 
-// desiredData returns the aggregated Secret data for all pools. References
-// the pool reconciler reports as SecretError (namespace not allowed, name
-// too long, secret missing or without valid credentials) are skipped.
-func (r *PullSecretAggregator) desiredData(ctx context.Context) (map[string][]byte, error) {
+// desiredData returns the aggregated Secret data for all pools, given what
+// the aggregated Secret holds now. References the pool reconciler reports as
+// SecretError (namespace not allowed or unavailable, name too long, secret
+// missing, forbidden or without valid credentials) are skipped. A secret that
+// cannot be read for another reason keeps its current key, and the failures
+// are returned joined, along with the data. The data is nil only when the
+// pools could not be listed.
+func (r *PullSecretAggregator) desiredData(
+	ctx context.Context,
+	current map[string][]byte,
+) (map[string][]byte, error) {
 	var pools bootcv1alpha1.BootcNodePoolList
 	if err := r.List(ctx, &pools); err != nil {
 		return nil, fmt.Errorf("listing BootcNodePools: %w", err)
@@ -169,6 +200,7 @@ func (r *PullSecretAggregator) desiredData(ctx context.Context) (map[string][]by
 
 	reader := SourceReader{Reader: r.Secrets, Namespaces: r.Secrets.Namespaces()}
 	desired := map[string][]byte{}
+	var failures []error
 	for i := range pools.Items {
 		ref := pools.Items[i].Spec.PullSecretRef
 		if ref == nil {
@@ -176,12 +208,18 @@ func (r *PullSecretAggregator) desiredData(ctx context.Context) (map[string][]by
 		}
 		key, data, err := reader.Read(ctx, ref)
 		var fetchErr *FetchError
-		if errors.As(err, &fetchErr) && !Unreadable(err) {
-			return nil, err
-		}
-		if err == nil {
+		switch {
+		case err == nil:
 			desired[key] = data
+		case errors.As(err, &fetchErr) && !Unreadable(err):
+			failures = append(failures, err)
+			// Keep the last credentials, if there were any.
+			if key, keyErr := Key(ref.Namespace, ref.Name); keyErr == nil {
+				if old, ok := current[key]; ok {
+					desired[key] = old
+				}
+			}
 		}
 	}
-	return desired, nil
+	return desired, errors.Join(failures...)
 }
