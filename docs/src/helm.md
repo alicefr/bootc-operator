@@ -188,6 +188,13 @@ helm upgrade bootc-operator oci://ghcr.io/bootc-dev/bootc-operator/charts/bootc-
   --version <version> --namespace bootc-operator --set crds.install=false
 ```
 
+Upgrade the CRDs before the operator: the controller reports the
+`BootcOperatorConfig` [status](operations/configuration.md#checking-the-status),
+which needs the `status` subresource the CRD now has and the permission to
+update it that the new chart grants. An older CRD does not stop the operator
+from applying the configuration. The controller logs that it cannot write the
+status and tries again every minute.
+
 ## Uninstall
 
 ```bash

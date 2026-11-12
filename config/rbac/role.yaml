@@ -73,6 +73,7 @@ rules:
   - node.bootc.dev
   resources:
   - bootcnodepools/status
+  - bootcoperatorconfigs/status
   verbs:
   - get
   - patch
@@ -88,6 +89,7 @@ rules:
   resources:
   - bootcoperatorconfigs
   verbs:
+  - get
   - list
   - watch
 ---

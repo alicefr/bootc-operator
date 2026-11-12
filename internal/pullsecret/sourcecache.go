@@ -94,6 +94,10 @@ type NamespaceStatus struct {
 	// API server while it does not. Only meaningful when Listable.
 	WatchHealthy bool
 
+	// Checking is whether access was not checked yet, so Listable says
+	// nothing about it.
+	Checking bool
+
 	// Reason says why the namespace is not Listable.
 	Reason string
 }
@@ -263,7 +267,11 @@ func (c *SourceCache) Statuses() []NamespaceStatus {
 	defer c.mu.RUnlock()
 	statuses := make([]NamespaceStatus, 0, len(c.desired))
 	for _, ns := range c.desired {
-		status := NamespaceStatus{Namespace: ns, Reason: c.reasons[ns]}
+		status := NamespaceStatus{
+			Namespace: ns,
+			Reason:    c.reasons[ns],
+			Checking:  c.reasons[ns] == waitingForAccessCheck,
+		}
 		if e := c.entries[ns]; e != nil {
 			status.Listable = true
 			status.WatchHealthy = e.healthy(c.healthWindow())

@@ -211,7 +211,17 @@ func main() {
 		mgr.GetCache(),
 		ctrl.Log.WithName("config"),
 	)
+	configStatus := &controller.ConfigStatusReconciler{
+		Client:     mgr.GetClient(),
+		Config:     configWatcher,
+		Namespaces: sourceSecrets,
+	}
+	if err := configStatus.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "bootcoperatorconfig")
+		os.Exit(1)
+	}
 	configWatcher.OnChange(func(prev, next config.State) {
+		configStatus.Notify()
 		poolReconciler.ApplySettings(prev.Settings, next.Settings)
 		if slices.Equal(prev.Settings.PullSecretNamespaces, next.Settings.PullSecretNamespaces) {
 			return

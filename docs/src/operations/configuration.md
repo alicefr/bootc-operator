@@ -163,6 +163,47 @@ runs, see [Pull secret namespaces](#pull-secret-namespaces). No pod restarts
 for any of the settings. Daemon pods run only on nodes selected by a pool, and
 new ones read the current configuration when they start.
 
+## Checking the status
+
+The controller reports on each `BootcOperatorConfig` what it does with it, in
+`status`:
+
+```shell
+kubectl get bootcoperatorconfig cluster -o jsonpath='{.status}'
+```
+
+| Field | Meaning |
+| --- | --- |
+| `observedGeneration` | The generation of the configuration the controller last applied. |
+| `listablePullSecretNamespaces` | The namespaces, the operator's own included, whose Secrets the controller can list now. |
+| `conditions[type=ControllerReady]` | `True` when the controller applies the configuration in full. |
+
+When `ControllerReady` is `False`, its reason says why:
+
+- `PendingNamespaces`: the controller cannot list Secrets in some namespaces
+  of `pullSecretNamespaces`. The message names them and the reason. Grant the
+  [permissions](#pull-secret-namespaces); the controller checks again about
+  every 30 seconds. The rest of the configuration is applied meanwhile.
+- `WatchUnhealthy`: the watch of the Secrets in some namespaces is failing. The
+  controller reads them from the API server meanwhile, and recovers on its
+  own.
+- `MultipleConfigs`: more than one `BootcOperatorConfig` exists, and each
+  reports it. The controller keeps the settings it had, and applies none of
+  them, until exactly one remains.
+
+The status only describes the controller. It does not tell whether the daemons
+use a setting, whether the aggregated pull secret is up to date, or whether
+credentials reached the nodes. A problem writing the aggregated Secret is
+logged and retried, and shows on the pools that are affected. The daemons never
+write the status.
+
+The status is written by the elected controller, and only when it changes. The
+controller applies the configuration whether or not the write succeeds. If a
+partial upgrade left the CRD without the status subresource, or the controller
+without permission to update it, it logs that and tries again every minute.
+Upgrade the CRDs and the controller's RBAC first, see the [Helm
+guide](../helm.md#upgrade).
+
 ## Precedence and startup failures
 
 For each supported setting, the value is selected in this order:
