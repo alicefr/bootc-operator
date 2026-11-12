@@ -16,11 +16,15 @@ const (
 type OperatorControllerConfig struct {
 	// allowInsecureRegistry allows falling back to HTTP when accessing image
 	// registries. Enable this only for trusted registries that do not support TLS.
+	// Changes apply to the running controller, which resolves the tags of
+	// all pools again.
 	// +optional
 	AllowInsecureRegistry *bool `json:"allowInsecureRegistry,omitempty"`
 
 	// tagResolutionPeriodSeconds is the interval in seconds between resolving
 	// image tags to digests. When omitted, use the CLI value or 300 seconds.
+	// Changes apply to the running controller, which resolves the tags of
+	// all pools again.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	TagResolutionPeriodSeconds *int32 `json:"tagResolutionPeriodSeconds,omitempty"`

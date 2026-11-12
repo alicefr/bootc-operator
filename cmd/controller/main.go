@@ -115,6 +115,13 @@ func main() {
 		setupLog.Error(err, "Failed to load operator configuration")
 		os.Exit(1)
 	}
+	// The CLI values are what applies again if the configuration is deleted,
+	// so take them before the configuration is applied to the flags.
+	fallback, err := config.SettingsFromFlags(flag.CommandLine)
+	if err != nil {
+		setupLog.Error(err, "Failed to read CLI settings")
+		os.Exit(1)
+	}
 	if err := config.ApplyToFlags(flag.CommandLine, operatorConfig); err != nil {
 		setupLog.Error(err, "Failed to apply operator configuration")
 		os.Exit(1)
@@ -180,17 +187,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.BootcNodePoolReconciler{
+	poolReconciler := &controller.BootcNodePoolReconciler{
 		Client:                mgr.GetClient(),
 		Scheme:                mgr.GetScheme(),
 		KubeClient:            kubeClient,
 		EventNamespace:        operatorNamespace,
-		TagResolver:           &registry.GGCRResolver{AllowInsecure: allowInsecureRegistry},
+		TagResolver:           registry.NewGGCRResolver(allowInsecureRegistry),
 		TagResolutionInterval: tagResolutionInterval,
 		PullSecretNamespaces:  pullSecretNamespaces,
 		SourceSecrets:         sourceSecrets,
-	}).SetupWithManager(mgr); err != nil {
+	}
+	if err := poolReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "bootcnodepool")
+		os.Exit(1)
+	}
+
+	configWatcher := config.NewWatcher(
+		fallback,
+		operatorConfig,
+		mgr.GetCache(),
+		ctrl.Log.WithName("config"),
+	)
+	configWatcher.OnChange(func(prev, next config.State) {
+		poolReconciler.ApplySettings(prev.Settings, next.Settings)
+	})
+	if err := mgr.Add(configWatcher); err != nil {
+		setupLog.Error(err, "Failed to add operator configuration watcher")
 		os.Exit(1)
 	}
 

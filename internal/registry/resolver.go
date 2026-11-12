@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -17,10 +18,24 @@ import (
 )
 
 // GGCRResolver resolves image tags to digests using go-containerregistry.
+// The zero value only uses HTTPS. It is safe for concurrent use, including
+// SetAllowInsecure.
 type GGCRResolver struct {
-	// AllowInsecure enables fallback to HTTP when the HTTPS connection
-	// to the registry fails.
-	AllowInsecure bool
+	allowInsecure atomic.Bool
+}
+
+// NewGGCRResolver returns a resolver that falls back to HTTP when the HTTPS
+// connection to a registry fails, if allowInsecure is set.
+func NewGGCRResolver(allowInsecure bool) *GGCRResolver {
+	r := &GGCRResolver{}
+	r.allowInsecure.Store(allowInsecure)
+	return r
+}
+
+// SetAllowInsecure changes whether to fall back to HTTP. It applies to
+// the resolutions that start afterwards.
+func (r *GGCRResolver) SetAllowInsecure(allowInsecure bool) {
+	r.allowInsecure.Store(allowInsecure)
 }
 
 func (r *GGCRResolver) Resolve(ctx context.Context, ref string, auth []byte) (string, error) {
@@ -43,7 +58,8 @@ func (r *GGCRResolver) Resolve(ctx context.Context, ref string, auth []byte) (st
 
 	desc, err := remote.Get(parsed, opts...)
 	var tlsErr *tls.CertificateVerificationError
-	if (errors.As(err, &tlsErr) || errors.Is(err, http.ErrSchemeMismatch)) && r.AllowInsecure {
+	if (errors.As(err, &tlsErr) || errors.Is(err, http.ErrSchemeMismatch)) &&
+		r.allowInsecure.Load() {
 		insecure, parseErr := name.ParseReference(ref, name.Insecure)
 		if parseErr != nil {
 			return "", fmt.Errorf("parsing reference %q: %w", ref, parseErr)

@@ -194,7 +194,7 @@ func runWatcher(
 	w := NewWatcher(testFallback, initial, api, logr.Discard())
 	var mu sync.Mutex
 	changes := 0
-	w.OnChange(func(State) {
+	w.OnChange(func(_, _ State) {
 		mu.Lock()
 		defer mu.Unlock()
 		changes++
@@ -363,4 +363,30 @@ func TestWatcherSurvivesWatchOutage(t *testing.T) {
 	api.breakWatch(func() { delete(api.configs, "custom") })
 	g.Eventually(interval(w), eventually, poll).Should(Equal(5 * time.Minute))
 	g.Expect(w.State().Active).To(BeNil(), fmt.Sprintf("%+v", w.State()))
+}
+
+func TestWatcherReportsPreviousAndNewState(t *testing.T) {
+	g := NewWithT(t)
+	api := newFakeAPI()
+	w := NewWatcher(testFallback, nil, api, logr.Discard())
+	type change struct{ prev, next State }
+	changes := make(chan change, 4)
+	w.OnChange(func(prev, next State) { changes <- change{prev, next} })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Start(ctx) }()
+	defer func() {
+		cancel()
+		g.Eventually(done, eventually).Should(Receive(BeNil()))
+	}()
+	g.Eventually(api.watching, eventually, poll).Should(BeTrue())
+
+	api.apply(newConfig("custom", 30))
+
+	var got change
+	g.Eventually(changes, eventually).Should(Receive(&got))
+	g.Expect(got.prev.Settings.TagResolutionInterval).To(Equal(5 * time.Minute))
+	g.Expect(got.prev.Active).To(BeNil())
+	g.Expect(got.next.Settings.TagResolutionInterval).To(Equal(30 * time.Second))
+	g.Expect(got.next.Active.Name).To(Equal("custom"))
 }

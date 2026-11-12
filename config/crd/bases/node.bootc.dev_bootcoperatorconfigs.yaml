@@ -53,6 +53,8 @@ spec:
                     description: |-
                       allowInsecureRegistry allows falling back to HTTP when accessing image
                       registries. Enable this only for trusted registries that do not support TLS.
+                      Changes apply to the running controller, which resolves the tags of
+                      all pools again.
                     type: boolean
                   pullSecretNamespaces:
                     description: |-
@@ -70,6 +72,8 @@ spec:
                     description: |-
                       tagResolutionPeriodSeconds is the interval in seconds between resolving
                       image tags to digests. When omitted, use the CLI value or 300 seconds.
+                      Changes apply to the running controller, which resolves the tags of
+                      all pools again.
                     format: int32
                     minimum: 1
                     type: integer

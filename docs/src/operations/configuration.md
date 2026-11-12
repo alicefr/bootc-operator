@@ -134,9 +134,13 @@ curl -fL -o operator-config.yaml \
 kubectl apply -f operator-config.yaml
 ```
 
-The configuration is read once when each controller or daemon process starts.
-Editing the resource does not restart pods or change running processes.
-Restart the workload whose settings changed. The example above changes both:
+The controller applies changes to `controller.allowInsecureRegistry` and
+`controller.tagResolutionPeriodSeconds` while it runs, within seconds of the
+edit, and resolves the tags of all pools with a tag-based image again so the
+new settings take effect at once. The other settings are read once when each
+controller or daemon process starts. Editing them does not restart pods or
+change running processes, so restart the workload whose settings changed. The
+example above changes both:
 
 ```shell
 kubectl -n bootc-operator rollout restart deployment/bootc-operator-controller-manager
@@ -169,19 +173,23 @@ More than one configuration, a missing CRD, denied API access, or a connection
 failure stops startup with an error. Remove extra configurations, install the
 matching CRD and permissions, or restore API connectivity before restarting.
 A running process keeps its loaded settings during a later API outage.
+If more than one configuration exists while the controller runs, it keeps
+applying the settings it had until exactly one remains.
 
 ## Reverting and upgrading
 
 Restore a field's previous value, or remove it to use the CLI value or built-in
-default, then restart the affected workload. To remove all overrides from this resource:
+default, then restart the affected workload if it does not apply the setting
+live. To remove all overrides from this resource:
 
 ```shell
 kubectl delete bootcoperatorconfig cluster
 ```
 
 Replace `cluster` with the resource's actual name if you used a different one.
-Then restart the affected controller and daemon pods as above. Deletion alone
-does not change running processes. Explicit command-line flags still apply.
+The controller then goes back to the CLI value or built-in default of the
+settings it applies live. Restart the pods of the others as above. Explicit
+command-line flags still apply.
 
 Reapplying installation manifests during an ordinary upgrade preserves the
 configuration resource. For Helm installation and removal behavior, see the

@@ -73,7 +73,7 @@ type Watcher struct {
 
 	mu       sync.RWMutex
 	state    State
-	onChange []func(State)
+	onChange []func(prev, next State)
 
 	// handleMu serializes handle, so state changes are applied and reported
 	// in the order of the events. It guards configs and synced.
@@ -109,9 +109,10 @@ func (w *Watcher) State() State {
 	return w.copyState()
 }
 
-// OnChange registers fn to be called whenever the state changes. Register
-// before Start. fn runs on the watcher's goroutine, so it must not block.
-func (w *Watcher) OnChange(fn func(State)) {
+// OnChange registers fn to be called with the previous and the new state
+// whenever the state changes. Register before Start. fn runs on the watcher's
+// goroutine, so it must not block.
+func (w *Watcher) OnChange(fn func(prev, next State)) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.onChange = append(w.onChange, fn)
@@ -224,6 +225,7 @@ func (w *Watcher) apply() {
 		w.mu.Unlock()
 		return
 	}
+	prev := w.copyState()
 	w.state = next
 	callbacks := slices.Clone(w.onChange)
 	published := w.copyState()
@@ -236,6 +238,6 @@ func (w *Watcher) apply() {
 		w.log.Info("Applied operator configuration", "active", activeIdentity(next.Active))
 	}
 	for _, fn := range callbacks {
-		fn(published)
+		fn(prev, published)
 	}
 }

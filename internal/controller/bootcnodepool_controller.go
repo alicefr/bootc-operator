@@ -67,7 +67,11 @@ type BootcNodePoolReconciler struct {
 	// resources are created. Without this, client-go defaults to "default".
 	EventNamespace string
 
-	TagResolver           TagResolver
+	TagResolver TagResolver
+
+	// TagResolutionInterval is how often tag-based image refs are
+	// re-resolved. ApplySettings changes it while the controller runs; read it
+	// with tagResolutionInterval.
 	TagResolutionInterval time.Duration
 
 	// PullSecretNamespaces is the allowlist of namespaces pools may
@@ -83,6 +87,18 @@ type BootcNodePoolReconciler struct {
 	// owning pool after a drain completes.
 	drainCh chan event.GenericEvent
 
+	// settingsCh receives an event when registry settings change, to
+	// re-enqueue the pools with tag-based image refs.
+	settingsCh chan event.GenericEvent
+
+	// settingsMu protects TagResolutionInterval and forceResolve.
+	settingsMu sync.Mutex
+
+	// forceResolve holds the pools that must resolve their tag at the next
+	// reconcile, whatever NextTagResolutionTime says, since the settings it
+	// was scheduled with changed.
+	forceResolve map[string]struct{}
+
 	// drains tracks in-progress drain goroutines keyed by node name.
 	// Protected by drainsMu. The mutex is not necessary today since
 	// MaxConcurrentReconciles defaults to 1, but would be needed if
@@ -92,7 +108,7 @@ type BootcNodePoolReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=node.bootc.dev,resources=bootcnodepools,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=node.bootc.dev,resources=bootcoperatorconfigs,verbs=list
+// +kubebuilder:rbac:groups=node.bootc.dev,resources=bootcoperatorconfigs,verbs=list;watch
 // +kubebuilder:rbac:groups=node.bootc.dev,resources=bootcnodepools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=node.bootc.dev,resources=bootcnodepools/finalizers,verbs=update
 // +kubebuilder:rbac:groups=node.bootc.dev,resources=bootcnodes,verbs=get;list;watch;create;update;patch;delete
@@ -110,6 +126,7 @@ type BootcNodePoolReconciler struct {
 func (r *BootcNodePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Recorder = mgr.GetEventRecorder("bootc-operator")
 	r.drainCh = make(chan event.GenericEvent, 100)
+	r.settingsCh = make(chan event.GenericEvent, 1)
 	r.drains = make(map[string]*drainStatus)
 
 	// ctrlBuilder avoids shadowing the imported "sigs.k8s.io/controller-runtime/pkg/builder" package.
@@ -120,7 +137,11 @@ func (r *BootcNodePoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WatchesRawSource(r.SourceSecrets.Source(
 			handler.EnqueueRequestsFromMapFunc(r.mapSecretToPoolRequests),
 		)).
-		WatchesRawSource(source.Channel(r.drainCh, &handler.EnqueueRequestForObject{}))
+		WatchesRawSource(source.Channel(r.drainCh, &handler.EnqueueRequestForObject{})).
+		WatchesRawSource(source.Channel(
+			r.settingsCh,
+			handler.EnqueueRequestsFromMapFunc(r.mapSettingsToPoolRequests),
+		))
 
 	// Karpenter is optional. Only register the NodeClaim watch when its CRD is
 	// discoverable, so the operator remains usable on ordinary clusters.
@@ -583,9 +604,11 @@ func (r *BootcNodePoolReconciler) resolveTargetDigest(
 		return ctrl.Result{}, false, nil
 	}
 
-	// Tag ref — check if resolution is due.
+	// Tag ref — check if resolution is due. A schedule made under settings
+	// that have changed since does not count.
 	now := time.Now()
-	if pool.Status.NextTagResolutionTime != nil &&
+	force := r.takeForceResolve(pool.Name)
+	if pool.Status.NextTagResolutionTime != nil && !force &&
 		now.Before(pool.Status.NextTagResolutionTime.Time) {
 		remaining := pool.Status.NextTagResolutionTime.Sub(now)
 		log.V(1).Info("Tag resolution not yet due", "remaining", remaining)
@@ -606,9 +629,10 @@ func (r *BootcNodePoolReconciler) resolveTargetDigest(
 		clearPoolDegradedReason(pool, bootcv1alpha1.PoolTagResolutionError)
 	}
 
-	next := metav1.NewTime(now.Add(r.TagResolutionInterval))
+	interval := r.tagResolutionInterval()
+	next := metav1.NewTime(now.Add(interval))
 	pool.Status.NextTagResolutionTime = &next
-	return ctrl.Result{RequeueAfter: r.TagResolutionInterval}, tagTargetChanged, nil
+	return ctrl.Result{RequeueAfter: interval}, tagTargetChanged, nil
 }
 
 // parseImageRef parses an image reference string into a named
