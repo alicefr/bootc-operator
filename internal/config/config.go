@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package config loads and applies optional operator configuration at startup.
+// Package config loads the optional operator configuration at startup and
+// follows it while the process runs.
 package config
 
 import (
