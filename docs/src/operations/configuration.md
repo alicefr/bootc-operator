@@ -137,24 +137,24 @@ kubectl apply -f operator-config.yaml
 The controller applies changes to `controller.allowInsecureRegistry` and
 `controller.tagResolutionPeriodSeconds` while it runs, within seconds of the
 edit, and resolves the tags of all pools with a tag-based image again so the
-new settings take effect at once. The other settings are read once when each
-controller or daemon process starts. Editing them does not restart pods or
-change running processes, so restart the workload whose settings changed. The
-example above changes both:
+new settings take effect at once. Each daemon applies
+`daemon.statusPollPeriodSeconds` the same way: if it is polling because
+filesystem notifications are unavailable, the next poll is one new interval
+from the change, and otherwise the new interval is kept for when polling
+starts. The other setting, `controller.pullSecretNamespaces`, is read once
+when the controller starts. Editing it does not restart pods or change
+running processes, so restart the controller after changing it:
 
 ```shell
 kubectl -n bootc-operator rollout restart deployment/bootc-operator-controller-manager
 kubectl -n bootc-operator rollout status deployment/bootc-operator-controller-manager --timeout=3m
-kubectl -n bootc-operator rollout restart daemonset/bootc-operator-daemon
-kubectl -n bootc-operator rollout status daemonset/bootc-operator-daemon --timeout=3m
 ```
 
 For Helm installations, use `deployment/bootc-operator-controller` instead of
 `deployment/bootc-operator-controller-manager` in the restart and status commands.
 Use the workload names and namespace from your installation if customized.
 Daemon pods run only on nodes selected by a pool. New pods read the current
-configuration automatically. Restarting the controller alone does not
-reconfigure existing daemon pods.
+configuration when they start.
 
 ## Precedence and startup failures
 
@@ -179,17 +179,16 @@ applying the settings it had until exactly one remains.
 ## Reverting and upgrading
 
 Restore a field's previous value, or remove it to use the CLI value or built-in
-default, then restart the affected workload if it does not apply the setting
-live. To remove all overrides from this resource:
+default. Restart the controller if the field is `pullSecretNamespaces`. To remove all overrides from this resource:
 
 ```shell
 kubectl delete bootcoperatorconfig cluster
 ```
 
 Replace `cluster` with the resource's actual name if you used a different one.
-The controller then goes back to the CLI value or built-in default of the
-settings it applies live. Restart the pods of the others as above. Explicit
-command-line flags still apply.
+The controller and daemons then go back to the CLI value or built-in default
+of the settings they apply live. Restart the controller as above if the
+resource set `pullSecretNamespaces`. Explicit command-line flags still apply.
 
 Reapplying installation manifests during an ordinary upgrade preserves the
 configuration resource. For Helm installation and removal behavior, see the

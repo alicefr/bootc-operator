@@ -319,3 +319,134 @@ func TestWatcherGetVersionRecovers(t *testing.T) {
 		t.Fatalf("GetVersion() = %q, want %q", got, testBootcVersion)
 	}
 }
+
+func statusCalls(w *StatusWatcher) int {
+	f := w.Executor.(*fakeExecutor)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.statusCalls
+}
+
+func TestWatcherSetPollIntervalSpeedsUpFallbackPolling(t *testing.T) {
+	dir := t.TempDir()
+	w := newTestWatcher(
+		filepath.Join(dir, "nonexistent"),
+		filepath.Join(dir, "nonexistent2"),
+		10*time.Minute,
+	)
+	done, cancel := startWatcher(t, w)
+	defer cancel()
+	if got := statusCalls(w); got != 0 {
+		t.Fatalf("polled %d times before the first interval", got)
+	}
+
+	w.SetPollInterval(50 * time.Millisecond)
+
+	deadline := time.After(5 * time.Second)
+	for statusCalls(w) < 3 {
+		select {
+		case <-deadline:
+			t.Fatalf("polled %d times after shortening the interval", statusCalls(w))
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("watcher returned error: %v", err)
+	}
+}
+
+func TestWatcherSetPollIntervalRestartsTheTicker(t *testing.T) {
+	dir := t.TempDir()
+	w := newTestWatcher(
+		filepath.Join(dir, "nonexistent"),
+		filepath.Join(dir, "nonexistent2"),
+		100*time.Millisecond,
+	)
+	done, cancel := startWatcher(t, w)
+	defer cancel()
+
+	deadline := time.After(5 * time.Second)
+	for statusCalls(w) < 1 {
+		select {
+		case <-deadline:
+			t.Fatal("no poll at the initial interval")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	// The ticker restarts from now with the long interval, so the poll that
+	// was about to fire at the old one does not.
+	w.SetPollInterval(10 * time.Minute)
+	before := statusCalls(w)
+	time.Sleep(500 * time.Millisecond)
+	if got := statusCalls(w); got > before+1 {
+		t.Fatalf("kept polling at the old interval: %d polls since the change", got-before)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("watcher returned error: %v", err)
+	}
+}
+
+func TestWatcherSetPollIntervalWhileFsnotifyIsHealthy(t *testing.T) {
+	dir := t.TempDir()
+	ostreePath := filepath.Join(dir, "bootc")
+	if err := os.Mkdir(ostreePath, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	w := newTestWatcher(ostreePath, filepath.Join(dir, "nonexistent"), 10*time.Minute)
+	done, cancel := startWatcher(t, w)
+	defer cancel()
+
+	w.SetPollInterval(50 * time.Millisecond)
+
+	// The interval is kept for later, and nothing is polled in the meantime.
+	time.Sleep(500 * time.Millisecond)
+	if got := statusCalls(w); got != 0 {
+		t.Fatalf("polled %d times while fsnotify is healthy", got)
+	}
+	if got := w.pollInterval(); got != 50*time.Millisecond {
+		t.Fatalf("poll interval = %v, want it stored for the fallback", got)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("watcher returned error: %v", err)
+	}
+}
+
+func TestWatcherSetPollIntervalBeforeStart(t *testing.T) {
+	dir := t.TempDir()
+	w := newTestWatcher(
+		filepath.Join(dir, "nonexistent"),
+		filepath.Join(dir, "nonexistent2"),
+		10*time.Minute,
+	)
+	w.SetPollInterval(50 * time.Millisecond)
+	done, cancel := startWatcher(t, w)
+	defer cancel()
+
+	select {
+	case <-w.Events:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for a poll at the interval set before start")
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("watcher returned error: %v", err)
+	}
+}
+
+func TestWatcherSetPollIntervalNonPositiveMeansDefault(t *testing.T) {
+	w := newTestWatcher("", "", time.Second)
+	for _, interval := range []time.Duration{0, -time.Second} {
+		w.SetPollInterval(interval)
+		if got := w.pollInterval(); got != DefaultPollInterval {
+			t.Fatalf("SetPollInterval(%v): interval = %v, want the default", interval, got)
+		}
+	}
+}

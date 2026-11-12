@@ -28,6 +28,8 @@ const (
 )
 
 type StatusWatcher struct {
+	// PollInterval is the fallback polling interval. SetPollInterval changes
+	// it while the watcher runs; it is not to be touched afterwards.
 	PollInterval  time.Duration
 	OstreePath    string
 	ComposefsPath string
@@ -40,10 +42,48 @@ type StatusWatcher struct {
 	cached  *bootc.Status
 	started bool
 
+	// pollMu protects PollInterval once the watcher is shared. pollChanged
+	// tells the loop it changed.
+	pollMu      sync.Mutex
+	pollOnce    sync.Once
+	pollChanged chan struct{}
+
 	versionMu   sync.Mutex
 	versionDone bool
 	version     string
 	versionErr  error
+}
+
+// pollChangedCh returns the channel SetPollInterval signals on.
+func (w *StatusWatcher) pollChangedCh() chan struct{} {
+	w.pollOnce.Do(func() { w.pollChanged = make(chan struct{}, 1) })
+	return w.pollChanged
+}
+
+// pollInterval returns the current fallback polling interval, which is the
+// default when none, or a non-positive one, was set.
+func (w *StatusWatcher) pollInterval() time.Duration {
+	w.pollMu.Lock()
+	defer w.pollMu.Unlock()
+	if w.PollInterval <= 0 {
+		w.PollInterval = DefaultPollInterval
+	}
+	return w.PollInterval
+}
+
+// SetPollInterval changes the fallback polling interval while the watcher
+// runs. If it is polling because fsnotify is unavailable, the next poll is one
+// interval from now. If fsnotify works, the interval is kept for when polling
+// starts, and no poll is triggered. A non-positive interval means the default.
+func (w *StatusWatcher) SetPollInterval(interval time.Duration) {
+	w.pollMu.Lock()
+	w.PollInterval = interval
+	w.pollMu.Unlock()
+
+	select {
+	case w.pollChangedCh() <- struct{}{}:
+	default:
+	}
 }
 
 // GetVersion returns the host bootc version. The bootc binary lives in
@@ -115,15 +155,11 @@ func (w *StatusWatcher) Start(ctx context.Context) error {
 	}
 	defer closeFsWatcher()
 
-	if w.PollInterval <= 0 {
-		w.PollInterval = DefaultPollInterval
-	}
-
 	// Only start polling once fsnotify is unavailable.
 	var ticker *time.Ticker
 	var tickerCh <-chan time.Time
 	if fsWatcher == nil {
-		ticker = time.NewTicker(w.PollInterval)
+		ticker = time.NewTicker(w.pollInterval())
 		tickerCh = ticker.C
 	}
 	defer func() {
@@ -147,10 +183,20 @@ func (w *StatusWatcher) Start(ctx context.Context) error {
 		close(w.Ready)
 	}
 
+	pollChanged := w.pollChangedCh()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-pollChanged:
+			interval := w.pollInterval()
+			if ticker != nil {
+				log.Info("Changed the bootc status polling interval", "interval", interval)
+				ticker.Reset(interval)
+			} else {
+				log.V(1).Info("Keeping the new polling interval for when polling starts",
+					"interval", interval)
+			}
 		case ev := <-evCh:
 			// ostree backend: mtime change triggers ATTRIB (Chmod).
 			// composefs backend: new deploy directory triggers Create.
@@ -166,7 +212,7 @@ func (w *StatusWatcher) Start(ctx context.Context) error {
 			closeFsWatcher()
 			evCh = nil
 			errCh = nil
-			ticker = time.NewTicker(w.PollInterval)
+			ticker = time.NewTicker(w.pollInterval())
 			tickerCh = ticker.C
 		case <-tickerCh:
 			log.V(1).Info("Polling bootc status")

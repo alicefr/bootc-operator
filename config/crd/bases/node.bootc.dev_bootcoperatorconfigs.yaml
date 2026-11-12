@@ -87,7 +87,7 @@ spec:
                     description: |-
                       statusPollPeriodSeconds is the interval in seconds between bootc status
                       polls when filesystem notifications are unavailable. When omitted, use the
-                      CLI value or 300 seconds.
+                      CLI value or 300 seconds. Changes apply to the running daemons.
                     format: int32
                     minimum: 1
                     type: integer

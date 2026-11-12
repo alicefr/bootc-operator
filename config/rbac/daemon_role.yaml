@@ -12,6 +12,7 @@ rules:
   - bootcoperatorconfigs
   verbs:
   - list
+  - watch
 - apiGroups:
   - node.bootc.dev
   resources:

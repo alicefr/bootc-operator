@@ -44,7 +44,7 @@ type OperatorControllerConfig struct {
 type OperatorDaemonConfig struct {
 	// statusPollPeriodSeconds is the interval in seconds between bootc status
 	// polls when filesystem notifications are unavailable. When omitted, use the
-	// CLI value or 300 seconds.
+	// CLI value or 300 seconds. Changes apply to the running daemons.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	StatusPollPeriodSeconds *int32 `json:"statusPollPeriodSeconds,omitempty"`

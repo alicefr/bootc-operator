@@ -14,9 +14,10 @@ import (
 )
 
 type fakeExecutor struct {
-	mu        sync.Mutex
-	status    bootc.Status
-	statusErr error
+	mu          sync.Mutex
+	status      bootc.Status
+	statusErr   error
+	statusCalls int
 
 	version      string
 	versionErr   error
@@ -34,6 +35,7 @@ type fakeExecutor struct {
 func (f *fakeExecutor) Status(_ context.Context) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.statusCalls++
 	if f.statusErr != nil {
 		return nil, f.statusErr
 	}

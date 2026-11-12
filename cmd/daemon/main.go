@@ -86,6 +86,13 @@ func main() {
 		setupLog.Error(err, "Failed to load operator configuration")
 		os.Exit(1)
 	}
+	// The CLI values are what applies again if the configuration is deleted,
+	// so take them before the configuration is applied to the flags.
+	fallback, err := config.SettingsFromFlags(flag.CommandLine)
+	if err != nil {
+		setupLog.Error(err, "Failed to read CLI settings")
+		os.Exit(1)
+	}
 	if err := config.ApplyToFlags(flag.CommandLine, operatorConfig); err != nil {
 		setupLog.Error(err, "Failed to apply operator configuration")
 		os.Exit(1)
@@ -120,6 +127,22 @@ func main() {
 	}
 	if err := mgr.Add(watcher); err != nil {
 		setupLog.Error(err, "Failed to add status watcher")
+		os.Exit(1)
+	}
+
+	configWatcher := config.NewWatcher(
+		fallback,
+		operatorConfig,
+		mgr.GetCache(),
+		ctrl.Log.WithName("config"),
+	)
+	configWatcher.OnChange(func(prev, next config.State) {
+		if prev.Settings.BootcPollInterval != next.Settings.BootcPollInterval {
+			watcher.SetPollInterval(next.Settings.BootcPollInterval)
+		}
+	})
+	if err := mgr.Add(configWatcher); err != nil {
+		setupLog.Error(err, "Failed to add operator configuration watcher")
 		os.Exit(1)
 	}
 
